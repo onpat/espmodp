@@ -99,6 +99,9 @@ extern "C" void app_main(void)
         }
         return res;
     };
+    callbacks.on_set_volume = [&](float vol) {
+        sound.set_volume(vol);
+    };
 
     // Host AP mode. This will be accessible from the AP and serve index.html at /
     //http_server.start(HttpServer::Mode::AP, callbacks, "ESP32-AP", "");

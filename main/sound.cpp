@@ -137,7 +137,7 @@ bool Sound::load_from_file(const char* filepath) {
     return true;
 }
 
-void Sound::generate(float* output, uint16_t num_samples) {
+void IRAM_ATTR Sound::generate(float* output, uint16_t num_samples) {
     ESP_LOGI(TAG, "Generating %u samples to memory", num_samples);
     if (xm_ctx) {
         xm_generate_samples(xm_ctx, output, num_samples);
@@ -151,7 +151,7 @@ void Sound::generate(float* output, uint16_t num_samples) {
     }
 }
 
-void Sound::generate16(int16_t* output, uint16_t num_samples) {
+void IRAM_ATTR Sound::generate16(int16_t* output, uint16_t num_samples) {
     if (!xm_ctx) {
         ESP_LOGE(TAG, "Cannot generate samples, context not initialized");
         return;
@@ -189,7 +189,7 @@ void Sound::generate16(int16_t* output, uint16_t num_samples) {
     }
 }
 
-void Sound::generate8(int8_t* output, uint16_t num_samples) {
+void IRAM_ATTR Sound::generate8(int8_t* output, uint16_t num_samples) {
     if (!xm_ctx) {
         ESP_LOGE(TAG, "Cannot generate samples, context not initialized");
         return;
@@ -354,7 +354,7 @@ bool Sound::init_external_i2s(int bck_io_num, int ws_io_num, int data_out_num) {
     return true;
 }
 
-inline uint32_t xorshift32() {
+inline uint32_t IRAM_ATTR xorshift32() {
     static uint32_t x = 2463534242; // Seed
     x ^= x << 13;
     x ^= x >> 17;
@@ -362,7 +362,7 @@ inline uint32_t xorshift32() {
     return x;
 }
 
-inline uint8_t processSampleWithDitherInt(int16_t sampleIn) {
+inline uint8_t IRAM_ATTR processSampleWithDitherInt(int16_t sampleIn) {
     int32_t scaled = (sampleIn * 127) / 128 + 32768;
     int32_t noise = (int32_t)(xorshift32() % 256) - 128;
     scaled += noise;
@@ -371,7 +371,7 @@ inline uint8_t processSampleWithDitherInt(int16_t sampleIn) {
     return (uint8_t)(scaled >> 8);
 }
 
-void Sound::output_internal_dac(int16_t* buffer, uint16_t samples) {
+void IRAM_ATTR Sound::output_internal_dac(int16_t* buffer, uint16_t samples) {
     if (!dac_handle) return;
     
     if (dac_oversampling) {
@@ -434,7 +434,7 @@ void Sound::output_internal_dac(int16_t* buffer, uint16_t samples) {
     }
 }
 
-void Sound::output_external_i2s(int16_t* buffer, uint16_t samples) {
+void IRAM_ATTR Sound::output_external_i2s(int16_t* buffer, uint16_t samples) {
     if (!i2s_tx_handle) return;
     
     size_t bytes_loaded = 0;

@@ -66,6 +66,10 @@ static const char* index_html = R"rawliteral(
                 }
             });
         }
+        function setVolume() {
+            var vol = document.getElementById('volumeSlider').value;
+            sendPost('set_volume', { volume: parseFloat(vol) / 100.0 });
+        }
         function uploadFile() {
             const fileInput = document.getElementById('fileInput');
             const file = fileInput.files[0];
@@ -94,6 +98,9 @@ static const char* index_html = R"rawliteral(
     <hr>
     <input type="text" id="msg" placeholder="Message to display"><br>
     <button onclick="displayString()">Display String</button>
+    <hr>
+    <h2>Volume</h2>
+    <input type="range" id="volumeSlider" min="0" max="100" value="20" onchange="setVolume()"><br>
     <hr>
     <h2>Files</h2>
     <ul id="fileList" style="list-style-type: none; padding: 0;"></ul>
@@ -267,6 +274,13 @@ int HttpServer::api_post_handler(void* req_v) {
                         httpd_resp_send(req, "{\"error\":\"Load failed or out of memory\"}", HTTPD_RESP_USE_STRLEN);
                         return ESP_OK;
                     }
+                }
+            }
+        } else if (strcmp(action->valuestring, "set_volume") == 0) {
+            cJSON *vol = cJSON_GetObjectItem(json, "volume");
+            if (cJSON_IsNumber(vol)) {
+                if (server->callbacks_.on_set_volume) {
+                    server->callbacks_.on_set_volume((float)vol->valuedouble);
                 }
             }
         }

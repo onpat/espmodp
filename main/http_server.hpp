@@ -10,6 +10,7 @@ public:
         std::function<void()> on_stop_playing;
         std::function<void(const std::string&)> on_display_string;
         std::function<bool(const std::string&)> on_load_xm;
+        std::function<void(float)> on_set_volume;
     };
 
     enum class Mode {

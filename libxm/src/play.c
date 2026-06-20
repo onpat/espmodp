@@ -536,17 +536,17 @@ static uint32_t xm_linear_frequency(uint16_t period, uint8_t arp_note_offset) {
 		   FT2 will use for an arpeggio */
 		period = period < 1540 ? 1540 : period;
 	}
-	return (uint32_t)(8363.f * exp2f((4608.f - (float)period) * (1.0f / 768.f)));
+	return (uint32_t)(8363.f * xm_exp2f((4608.f - (float)period) * (1.0f / 768.f)));
 }
 
 static uint16_t xm_amiga_period(int16_t note) {
-	return (uint16_t)(32.f * 856.f * exp2f((float)note * (-1.0f / 192.f)));
+	return (uint16_t)(32.f * 856.f * xm_exp2f((float)note * (-1.0f / 192.f)));
 }
 
 static uint32_t xm_amiga_frequency(uint16_t period, uint8_t arp_note_offset) {
 	float p = (float)period;
 	if(HAS_EFFECT(EFFECT_ARPEGGIO) && arp_note_offset) {
-		p *= exp2f((float)arp_note_offset * (-1.0f / 12.f));
+		p *= xm_exp2f((float)arp_note_offset * (-1.0f / 12.f));
 		p = p < 107.f ? 107.f : p;
 	}
 
@@ -1835,7 +1835,7 @@ static void xm_tick_effects(__attribute__((unused)) xm_context_t* ctx,
 	}
 }
 
-static float xm_sample_at(const xm_context_t* ctx,
+static float IRAM_ATTR xm_sample_at(const xm_context_t* ctx,
                           const xm_sample_t* sample, uint32_t k) {
 	assert(k < sample->length);
 	assert(sample->index + k < ctx->module.samples_data_length);
@@ -1843,7 +1843,7 @@ static float xm_sample_at(const xm_context_t* ctx,
 }
 
 /* XXX: rename me or merge with xm_next_of_channel */
-static float xm_next_of_sample(xm_context_t* ctx, xm_channel_context_t* ch) {
+static float IRAM_ATTR xm_next_of_sample(xm_context_t* ctx, xm_channel_context_t* ch) {
 	const xm_sample_t* smp = ch->sample;
 	assert(smp == NULL || smp->loop_length <= smp->length);
 
@@ -1930,7 +1930,7 @@ static float xm_next_of_sample(xm_context_t* ctx, xm_channel_context_t* ch) {
 	return u;
 }
 
-static void xm_next_of_channel(xm_context_t* ctx, xm_channel_context_t* ch,
+static void IRAM_ATTR xm_next_of_channel(xm_context_t* ctx, xm_channel_context_t* ch,
                                float* out_left, float* out_right) {
 	const float fval = xm_next_of_sample(ctx, ch) * AMPLIFICATION;
 
@@ -1953,7 +1953,7 @@ static void xm_next_of_channel(xm_context_t* ctx, xm_channel_context_t* ch,
 	#endif
 }
 
-static void xm_sample_unmixed(xm_context_t* ctx, float* out_lr) {
+static void IRAM_ATTR xm_sample_unmixed(xm_context_t* ctx, float* out_lr) {
 	if(ckd_sub(&ctx->remaining_samples_in_tick,
 	           ctx->remaining_samples_in_tick, TICK_SUBSAMPLES)) {
 		xm_tick(ctx);
@@ -1971,7 +1971,7 @@ static void xm_sample_unmixed(xm_context_t* ctx, float* out_lr) {
 	}
 }
 
-static void xm_sample(xm_context_t* ctx, float* out_left, float* out_right) {
+static void IRAM_ATTR xm_sample(xm_context_t* ctx, float* out_left, float* out_right) {
 	if(ckd_sub(&ctx->remaining_samples_in_tick,
 	           ctx->remaining_samples_in_tick, TICK_SUBSAMPLES)) {
 		xm_tick(ctx);
@@ -1987,7 +1987,7 @@ static void xm_sample(xm_context_t* ctx, float* out_left, float* out_right) {
 	assert(*out_right >= -NUM_CHANNELS(&ctx->module));
 }
 
-void xm_generate_samples(xm_context_t* ctx,
+void IRAM_ATTR xm_generate_samples(xm_context_t* ctx,
                          float* output,
                          uint16_t numsamples) {
 	#if XM_TIMING_FUNCTIONS

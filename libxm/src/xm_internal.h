@@ -9,6 +9,7 @@
 #include <xm.h>
 #include <math.h>
 #include <string.h>
+#include "esp_attr.h"
 #define ckd_add(ptr, a, b) __builtin_add_overflow((a), (b), (ptr))
 #define ckd_sub(ptr, a, b) __builtin_sub_overflow((a), (b), (ptr))
 #define ckd_mul(ptr, a, b) __builtin_mul_overflow((a), (b), (ptr))
@@ -42,6 +43,19 @@
 #define HAS_EFFECT(x) (!(((XM_DISABLED_EFFECTS) >> (x)) & 1))
 #define HAS_VOLUME_EFFECT(x) (!(((XM_DISABLED_VOLUME_EFFECTS) >> (x)) & 1))
 #define HAS_FEATURE(x) (!(((XM_DISABLED_FEATURES) >> (x)) & 1))
+
+static inline float xm_exp2f(float x) {
+    int i = (int)x;
+    if (x < 0.0f && x != (float)i) i--;
+    float f = x - i;
+
+    float pow2f = 1.0f + f * (0.695815f + f * (0.226067f + f * 0.078145f));
+
+    uint32_t ui = (uint32_t)(i + 127) << 23;
+    float uf;
+    memcpy(&uf, &ui, 4);
+    return pow2f * uf;
+}
 
 static_assert(_Generic((xm_sample_point_t){},
                         int8_t: true, int16_t: true, float: true,
