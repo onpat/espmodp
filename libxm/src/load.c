@@ -1999,7 +1999,7 @@ static void xm_load_mod(xm_context_t* __restrict ctx,
 	for(uint8_t ch = 0; ch < p->num_channels; ++ch) {
 		#if XM_MOD_SOFT_PANNING
 		ctx->module.default_channel_panning[ch] =
-			(((ch >> 1) ^ ch) & 1) ? 230 : 26;
+			(((ch >> 1) ^ ch) & 1) ? 204 : 52;
 		#else
 		ctx->module.default_channel_panning[ch] =
 			(((ch >> 1) ^ ch) & 1) ? 0xFF : 0x01;

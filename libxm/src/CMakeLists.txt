@@ -64,7 +64,7 @@ option_and_define(XM_MUTING_FUNCTIONS
 	"Enable xm_mute_*() functions for instruments and channels" "ON")
 
 option_and_define(XM_MOD_SOFT_PANNING
-	"Use 90% panning instead of 100% (hard) panning for MOD files" "ON")
+	"Use 80% panning instead of 100% (hard) panning for MOD files" "ON")
 
 set(XM_SAMPLE_TYPE "int16_t" CACHE STRING
 	"Sample type of internal samples (int8_t,int16_t,float)")

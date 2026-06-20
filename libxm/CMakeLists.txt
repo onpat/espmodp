@@ -25,7 +25,7 @@ option(XM_LIBXM_DELTA_SAMPLES "libxm delta samples in dump format" ON)
 option(XM_STRINGS "libxm stores module, instrument, and sample names" ON)
 option(XM_TIMING_FUNCTIONS "libxm timing query functions" ON)
 option(XM_MUTING_FUNCTIONS "libxm muting functions" ON)
-option(XM_MOD_SOFT_PANNING "libxm use 90% panning instead of 100% for MOD files" ON)
+option(XM_MOD_SOFT_PANNING "libxm use 80% panning instead of 100% for MOD files" ON)
 
 configure_file("${LIBXM_SRC_DIR}/xm.h.in" "${CMAKE_CURRENT_BINARY_DIR}/xm.h" @ONLY)
 
