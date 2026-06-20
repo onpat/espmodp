@@ -13,6 +13,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -40,9 +41,14 @@ typedef @XM_SAMPLE_TYPE@ xm_sample_point_t;
 
 
 
+typedef struct xm_stream_s {
+    size_t (*read)(struct xm_stream_s* stream, void* dest, size_t length, size_t offset);
+    void* user_data;
+} xm_stream_t;
+
 /** Pre-load key information from the module file.
  *
- * @param moddata[.moddata_length] contents of the module
+ * @param moddata contents of the module
  * @param moddata_length length of moddata (in bytes)
  *
  * @param out write results to this struct (does not need to be initialised
@@ -50,7 +56,7 @@ typedef @XM_SAMPLE_TYPE@ xm_sample_point_t;
  *
  * @returns true on success, false on failure
  */
-bool xm_prescan_module(const char* __restrict moddata, uint32_t moddata_length,
+bool xm_prescan_module(xm_stream_t* __restrict moddata, uint32_t moddata_length,
                        xm_prescan_data_t* __restrict out)
 __attribute__((warn_unused_result))
 __attribute__((nonnull(3)));
@@ -92,7 +98,7 @@ __attribute__((nonnull));
  */
 xm_context_t* xm_create_context(char* __restrict pool,
                                 const xm_prescan_data_t* __restrict p,
-                                const char* __restrict moddata,
+                                xm_stream_t* __restrict moddata,
                                 uint32_t moddata_length)
 __attribute__((assume_aligned(8)))
 __attribute__((warn_unused_result))

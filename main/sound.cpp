@@ -18,14 +18,32 @@ Sound::~Sound() {
         heap_caps_free(xm_pool);
         xm_pool = nullptr;
     }
+    if (temp_float_buf) {
+        heap_caps_free(temp_float_buf);
+        temp_float_buf = nullptr;
+    }
+    if (dac_buf) {
+        heap_caps_free(dac_buf);
+        dac_buf = nullptr;
+    }
     ESP_LOGI(TAG, "Sound destroyed");
+}
+
+static size_t mem_stream_read(xm_stream_t* stream, void* dest, size_t length, size_t offset) {
+    const uint8_t* data = static_cast<const uint8_t*>(stream->user_data);
+    memcpy(dest, data + offset, length);
+    return length;
 }
 
 bool Sound::load(const uint8_t* data, size_t size) {
     ESP_LOGI(TAG, "Loading file from memory (size: %zu bytes)", size);
     
+    xm_stream_t stream;
+    stream.read = mem_stream_read;
+    stream.user_data = (void*)data;
+
     xm_prescan_data_t* prescan = static_cast<xm_prescan_data_t*>(__builtin_alloca(XM_PRESCAN_DATA_SIZE));
-    if (!xm_prescan_module(reinterpret_cast<const char*>(data), size, prescan)) {
+    if (!xm_prescan_module(&stream, size, prescan)) {
         ESP_LOGE(TAG, "Failed to prescan module");
         return false;
     }
@@ -33,13 +51,18 @@ bool Sound::load(const uint8_t* data, size_t size) {
     uint32_t ctx_size = xm_size_for_context(prescan);
     ESP_LOGI(TAG, "Context size required: %lu bytes", (unsigned long)ctx_size);
 
+    if (xm_pool) {
+        heap_caps_free(xm_pool);
+        xm_pool = nullptr;
+    }
+
     xm_pool = static_cast<char*>(heap_caps_malloc(ctx_size, MALLOC_CAP_DEFAULT));
     if (!xm_pool) {
         ESP_LOGE(TAG, "Failed to allocate memory for context");
         return false;
     }
 
-    xm_ctx = xm_create_context(xm_pool, prescan, reinterpret_cast<const char*>(data), size);
+    xm_ctx = xm_create_context(xm_pool, prescan, &stream, size);
     if (!xm_ctx) {
         ESP_LOGE(TAG, "Failed to create context");
         heap_caps_free(xm_pool);
@@ -50,6 +73,67 @@ bool Sound::load(const uint8_t* data, size_t size) {
     xm_set_sample_rate(xm_ctx, 48000);
 
     ESP_LOGI(TAG, "Successfully loaded module from memory");
+    return true;
+}
+
+static size_t file_stream_read(xm_stream_t* stream, void* dest, size_t length, size_t offset) {
+    FILE* f = static_cast<FILE*>(stream->user_data);
+    fseek(f, offset, SEEK_SET);
+    return fread(dest, 1, length, f);
+}
+
+bool Sound::load_from_file(const char* filepath) {
+    ESP_LOGI(TAG, "Loading file from filesystem: %s", filepath);
+
+    FILE* f = fopen(filepath, "r");
+    if (!f) {
+        ESP_LOGE(TAG, "Failed to open file: %s", filepath);
+        return false;
+    }
+
+    fseek(f, 0, SEEK_END);
+    size_t size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    xm_stream_t stream;
+    stream.read = file_stream_read;
+    stream.user_data = f;
+
+    xm_prescan_data_t* prescan = static_cast<xm_prescan_data_t*>(__builtin_alloca(XM_PRESCAN_DATA_SIZE));
+    if (!xm_prescan_module(&stream, size, prescan)) {
+        ESP_LOGE(TAG, "Failed to prescan module");
+        fclose(f);
+        return false;
+    }
+
+    uint32_t ctx_size = xm_size_for_context(prescan);
+    ESP_LOGI(TAG, "Context size required: %lu bytes", (unsigned long)ctx_size);
+
+    if (xm_pool) {
+        heap_caps_free(xm_pool);
+        xm_pool = nullptr;
+    }
+
+    xm_pool = static_cast<char*>(heap_caps_malloc(ctx_size, MALLOC_CAP_DEFAULT));
+    if (!xm_pool) {
+        ESP_LOGE(TAG, "Failed to allocate memory for context");
+        fclose(f);
+        return false;
+    }
+
+    xm_ctx = xm_create_context(xm_pool, prescan, &stream, size);
+    fclose(f);
+
+    if (!xm_ctx) {
+        ESP_LOGE(TAG, "Failed to create context");
+        heap_caps_free(xm_pool);
+        xm_pool = nullptr;
+        return false;
+    }
+
+    xm_set_sample_rate(xm_ctx, 48000);
+
+    ESP_LOGI(TAG, "Successfully loaded module from file");
     return true;
 }
 
@@ -73,7 +157,12 @@ void Sound::generate16(int16_t* output, uint16_t num_samples) {
         return;
     }
     
-    float* temp_buf = static_cast<float*>(heap_caps_malloc(num_samples * 2 * sizeof(float), MALLOC_CAP_DEFAULT));
+    if (!temp_float_buf || temp_float_buf_samples < num_samples) {
+        if (temp_float_buf) heap_caps_free(temp_float_buf);
+        temp_float_buf = static_cast<float*>(heap_caps_malloc(num_samples * 2 * sizeof(float), MALLOC_CAP_DEFAULT));
+        temp_float_buf_samples = num_samples;
+    }
+    float* temp_buf = temp_float_buf;
     if (!temp_buf) return;
     
     xm_generate_samples(xm_ctx, temp_buf, num_samples);
@@ -98,8 +187,6 @@ void Sound::generate16(int16_t* output, uint16_t num_samples) {
         
         output[i] = static_cast<int16_t>(sample_int);
     }
-    
-    heap_caps_free(temp_buf);
 }
 
 void Sound::generate8(int8_t* output, uint16_t num_samples) {
@@ -108,7 +195,12 @@ void Sound::generate8(int8_t* output, uint16_t num_samples) {
         return;
     }
     
-    float* temp_buf = static_cast<float*>(heap_caps_malloc(num_samples * 2 * sizeof(float), MALLOC_CAP_DEFAULT));
+    if (!temp_float_buf || temp_float_buf_samples < num_samples) {
+        if (temp_float_buf) heap_caps_free(temp_float_buf);
+        temp_float_buf = static_cast<float*>(heap_caps_malloc(num_samples * 2 * sizeof(float), MALLOC_CAP_DEFAULT));
+        temp_float_buf_samples = num_samples;
+    }
+    float* temp_buf = temp_float_buf;
     if (!temp_buf) return;
     
     xm_generate_samples(xm_ctx, temp_buf, num_samples);
@@ -130,8 +222,6 @@ void Sound::generate8(int8_t* output, uint16_t num_samples) {
         
         output[i] = static_cast<int8_t>(sample_int);
     }
-    
-    heap_caps_free(temp_buf);
 }
 
 void Sound::start_playing(uint16_t chunk_samples, std::function<void(int16_t*, uint16_t)> callback) {
@@ -285,7 +375,11 @@ void Sound::output_internal_dac(int16_t* buffer, uint16_t samples) {
     if (!dac_handle) return;
     
     if (dac_oversampling) {
-        uint8_t* dac_buf = (uint8_t*)heap_caps_malloc(samples * 4, MALLOC_CAP_DEFAULT);
+        if (!dac_buf || dac_buf_size < samples * 4) {
+            if (dac_buf) heap_caps_free(dac_buf);
+            dac_buf = (uint8_t*)heap_caps_malloc(samples * 4, MALLOC_CAP_DEFAULT);
+            dac_buf_size = samples * 4;
+        }
         if (!dac_buf) return;
         
         uint32_t out_idx = 0;
@@ -319,9 +413,12 @@ void Sound::output_internal_dac(int16_t* buffer, uint16_t samples) {
         
         size_t bytes_loaded = 0;
         dac_continuous_write(dac_handle, dac_buf, samples * 4, &bytes_loaded, portMAX_DELAY);
-        heap_caps_free(dac_buf);
     } else {
-        uint8_t* dac_buf = (uint8_t*)heap_caps_malloc(samples * 2, MALLOC_CAP_DEFAULT);
+        if (!dac_buf || dac_buf_size < samples * 2) {
+            if (dac_buf) heap_caps_free(dac_buf);
+            dac_buf = (uint8_t*)heap_caps_malloc(samples * 2, MALLOC_CAP_DEFAULT);
+            dac_buf_size = samples * 2;
+        }
         if (!dac_buf) return;
         
         for (uint16_t i = 0; i < samples * 2; ++i) {
@@ -334,7 +431,6 @@ void Sound::output_internal_dac(int16_t* buffer, uint16_t samples) {
         
         size_t bytes_loaded = 0;
         dac_continuous_write(dac_handle, dac_buf, samples * 2, &bytes_loaded, portMAX_DELAY);
-        heap_caps_free(dac_buf);
     }
 }
 

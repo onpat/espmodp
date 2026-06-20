@@ -49,13 +49,22 @@ static const char* index_html = R"rawliteral(
                 list.innerHTML = '';
                 files.forEach(f => {
                     const li = document.createElement('li');
-                    li.innerHTML = f.name + ' (' + f.size + ' bytes) <button onclick="deleteFile(\'' + f.name + '\')">Delete</button>';
+                    li.innerHTML = '<a href="/api/download?filename=' + encodeURIComponent(f.name) + '">' + f.name + '</a> (' + f.size + ' bytes) <button onclick="loadXmFile(\'' + f.name + '\')">Load</button> <button onclick="deleteFile(\'' + f.name + '\')">Delete</button>';
                     list.appendChild(li);
                 });
             });
         }
         function deleteFile(name) {
             sendPost('delete_file', { filename: name }).then(() => setTimeout(loadFiles, 500));
+        }
+        function loadXmFile(name) {
+            sendPost('load_xm', { filename: name }).then(r => {
+                if (!r.ok) {
+                    r.json().then(data => alert('Error: ' + data.error)).catch(() => alert('Load failed'));
+                } else {
+                    alert('Loaded ' + name);
+                }
+            });
         }
         function uploadFile() {
             const fileInput = document.getElementById('fileInput');
@@ -246,6 +255,20 @@ int HttpServer::api_post_handler(void* req_v) {
                 std::string path = std::string("/lfs/") + filename->valuestring;
                 unlink(path.c_str());
             }
+        } else if (strcmp(action->valuestring, "load_xm") == 0) {
+            cJSON *filename = cJSON_GetObjectItem(json, "filename");
+            if (cJSON_IsString(filename) && (filename->valuestring != NULL)) {
+                std::string path = std::string("/lfs/") + filename->valuestring;
+                if (server->callbacks_.on_load_xm) {
+                    if (!server->callbacks_.on_load_xm(path)) {
+                        cJSON_Delete(json);
+                        httpd_resp_set_status(req, HTTPD_500);
+                        httpd_resp_set_type(req, "application/json");
+                        httpd_resp_send(req, "{\"error\":\"Load failed or out of memory\"}", HTTPD_RESP_USE_STRLEN);
+                        return ESP_OK;
+                    }
+                }
+            }
         }
     }
 
@@ -292,6 +315,14 @@ bool HttpServer::start_webserver() {
             .user_ctx  = this
         };
         httpd_register_uri_handler(server, &uri_upload);
+
+        httpd_uri_t uri_download = {
+            .uri       = "/api/download",
+            .method    = HTTP_GET,
+            .handler   = (esp_err_t (*)(httpd_req_t *))api_download_get_handler,
+            .user_ctx  = this
+        };
+        httpd_register_uri_handler(server, &uri_download);
 
         server_handle_ = server;
         return true;
@@ -393,5 +424,52 @@ int HttpServer::api_upload_post_handler(void* req_v) {
     fclose(f);
     
     httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+}
+
+int HttpServer::api_download_get_handler(void* req_v) {
+    httpd_req_t *req = (httpd_req_t *)req_v;
+
+    char filename[128] = {0};
+    size_t query_len = httpd_req_get_url_query_len(req);
+    if (query_len > 0) {
+        char* query = (char*)malloc(query_len + 1);
+        if (httpd_req_get_url_query_str(req, query, query_len + 1) == ESP_OK) {
+            httpd_query_key_value(query, "filename", filename, sizeof(filename));
+        }
+        free(query);
+    }
+
+    if (strlen(filename) == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing filename");
+        return ESP_FAIL;
+    }
+
+    std::string path = std::string("/lfs/") + filename;
+    FILE* f = fopen(path.c_str(), "r");
+    if (!f) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File not found");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/octet-stream");
+
+    std::string disposition = "attachment; filename=\"" + std::string(filename) + "\"";
+    httpd_resp_set_hdr(req, "Content-Disposition", disposition.c_str());
+
+    char chunk[1024];
+    size_t chunksize;
+    do {
+        chunksize = fread(chunk, 1, sizeof(chunk), f);
+        if (chunksize > 0) {
+            if (httpd_resp_send_chunk(req, chunk, chunksize) != ESP_OK) {
+                fclose(f);
+                return ESP_FAIL;
+            }
+        }
+    } while (chunksize != 0);
+
+    fclose(f);
+    httpd_resp_send_chunk(req, NULL, 0);
     return ESP_OK;
 }

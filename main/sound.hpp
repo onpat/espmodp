@@ -18,6 +18,7 @@ public:
     Sound& operator=(const Sound&) = delete;
 
     bool load(const uint8_t* data, size_t size);
+    bool load_from_file(const char* filepath);
     void generate(float* output, uint16_t num_samples);
     void generate16(int16_t* output, uint16_t num_samples);
     void generate8(int8_t* output, uint16_t num_samples);
@@ -50,6 +51,12 @@ private:
     i2s_chan_handle_t i2s_tx_handle;
 
     float master_volume;
+
+    float* temp_float_buf = nullptr;
+    size_t temp_float_buf_samples = 0;
+    
+    uint8_t* dac_buf = nullptr;
+    size_t dac_buf_size = 0;
 
     static void play_task(void* arg);
     static bool timer_isr_callback(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx);

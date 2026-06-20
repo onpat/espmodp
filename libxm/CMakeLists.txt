@@ -19,8 +19,8 @@ set(XM_DISABLED_FEATURES "0" CACHE STRING
     "libxm disabled features bit mask")
 
 option(XM_VERBOSE "libxm verbose logging" OFF)
-option(XM_LINEAR_INTERPOLATION "libxm linear interpolation" ON)
-option(XM_RAMPING "libxm ramping" ON)
+option(XM_LINEAR_INTERPOLATION "libxm linear interpolation" OFF)
+option(XM_RAMPING "libxm ramping" OFF)
 option(XM_LIBXM_DELTA_SAMPLES "libxm delta samples in dump format" ON)
 option(XM_STRINGS "libxm stores module, instrument, and sample names" ON)
 option(XM_TIMING_FUNCTIONS "libxm timing query functions" ON)
@@ -41,7 +41,7 @@ idf_component_register(
         "${LIBXM_SRC_DIR}"
 )
 
-target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-error=maybe-uninitialized)
+target_compile_options(${COMPONENT_LIB} PRIVATE -O3 -ffast-math -Wno-error=maybe-uninitialized)
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
     XM_VERBOSE=$<BOOL:${XM_VERBOSE}>
     XM_LINEAR_INTERPOLATION=$<BOOL:${XM_LINEAR_INTERPOLATION}>

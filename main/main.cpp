@@ -89,9 +89,20 @@ extern "C" void app_main(void)
     callbacks.on_display_string = [render_message](const std::string& msg) {
         render_message(msg);
     };
+    callbacks.on_load_xm = [&](const std::string& path) {
+        sound.stop_playing();
+        bool res = sound.load_from_file(path.c_str());
+        if (res) {
+            render_message("Loaded: " + path);
+        } else {
+            render_message("Failed: " + path);
+        }
+        return res;
+    };
 
     // Host AP mode. This will be accessible from the AP and serve index.html at /
-    http_server.start(HttpServer::Mode::AP, callbacks, "ESP32-AP", "");
+    //http_server.start(HttpServer::Mode::AP, callbacks, "ESP32-AP", "");
+    http_server.start(HttpServer::Mode::Client, callbacks, "OpenWrt", "Tudor400");
 
     wait_forever();
 }

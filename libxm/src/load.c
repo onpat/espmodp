@@ -25,9 +25,19 @@
  * If we attempt to read the buffer out-of-bounds, pretend that the buffer is
  * infinitely padded with zeroes.
  */
+static inline uint8_t stream_read_u8(xm_stream_t* stream, uint32_t offset) {
+    uint8_t val = 0;
+    stream->read(stream, &val, 1, offset);
+    return val;
+}
+
+static inline void stream_read_memcpy(xm_stream_t* stream, void* dest, uint32_t offset, uint32_t length) {
+    stream->read(stream, dest, length, offset);
+}
+
 #define READ_U8_BOUND(offset, bound) \
 	((uint8_t)(((uint32_t)(offset) < (uint32_t)(bound)) ? \
-	           (((uint8_t*)moddata)[offset]) : 0))
+	           stream_read_u8(moddata, offset) : 0))
 
 #define READ_U16_BOUND(offset, bound) \
 	((uint16_t)((uint16_t)READ_U8_BOUND(offset, bound) \
@@ -44,10 +54,13 @@
 	            | (uint32_t)READ_U16BE_BOUND((offset) + 2, bound)))
 
 #define READ_MEMCPY_BOUND(dest, offset, length, bound) \
-	__builtin_memcpy(dest, (uint8_t*)(moddata) + (offset), \
-	                 ((offset) + (length) <= (bound)) ? \
+	do { \
+		uint32_t _len = ((offset) + (length) <= (bound)) ? \
 	                 (length) : ((offset) >= (bound) ? \
-	                             0 : (bound) - (offset)))
+	                             0 : (bound) - (offset)); \
+		if (_len > 0) stream_read_memcpy(moddata, dest, offset, _len); \
+		if ((length) > _len) __builtin_memset((uint8_t*)(dest) + _len, 0, (length) - _len); \
+	} while(0)
 
 #define READ_U8(offset) READ_U8_BOUND(offset, moddata_length)
 #define READ_U16(offset) READ_U16_BOUND(offset, moddata_length)
@@ -117,59 +130,69 @@ static int8_t xm_dither_16b_8b(int16_t);
 static uint64_t xm_fnv1a(const unsigned char*, uint32_t) __attribute__((const));
 static void xm_fixup_common(xm_context_t*);
 
-static bool xm_prescan_xmif(const char*, uint32_t, xm_prescan_data_t*);
-static void xm_load_xmif(xm_context_t*, const char*, uint32_t);
+static bool xm_prescan_xmif(xm_stream_t*, uint32_t, xm_prescan_data_t*);
+static void xm_load_xmif(xm_context_t*, xm_stream_t*, uint32_t);
 
-static bool xm_prescan_xm0104(const char*, uint32_t, xm_prescan_data_t*);
-static void xm_load_xm0104(xm_context_t*, const char*, uint32_t);
-static uint32_t xm_load_xm0104_module_header(xm_context_t*, uint8_t*, const char*, uint32_t);
-static uint32_t xm_load_xm0104_pattern(xm_context_t*, xm_pattern_t*, const char*, uint32_t, uint32_t);
-static uint32_t xm_load_xm0104_instrument(xm_context_t*, xm_instrument_t*, const char*, uint32_t, uint32_t);
-__attribute__((unused)) static void xm_load_xm0104_envelope_points(xm_envelope_t*, const char*);
+static bool xm_prescan_xm0104(xm_stream_t*, uint32_t, xm_prescan_data_t*);
+static void xm_load_xm0104(xm_context_t*, xm_stream_t*, uint32_t);
+static uint32_t xm_load_xm0104_module_header(xm_context_t*, uint8_t*, xm_stream_t*, uint32_t);
+static uint32_t xm_load_xm0104_pattern(xm_context_t*, xm_pattern_t*, xm_stream_t*, uint32_t, uint32_t);
+static uint32_t xm_load_xm0104_instrument(xm_context_t*, xm_instrument_t*, xm_stream_t*, uint32_t, uint32_t);
+__attribute__((unused)) static void xm_load_xm0104_envelope_points(xm_envelope_t*, xm_stream_t*, uint32_t);
 __attribute__((unused)) static void xm_check_and_fix_envelope(xm_envelope_t*, uint8_t);
-static uint32_t xm_load_xm0104_sample_header(xm_sample_t*, bool*, const char*, uint32_t, uint32_t);
-static void xm_load_xm0104_8b_sample_data(uint32_t, xm_sample_point_t*, const char*, uint32_t, uint32_t);
-static void xm_load_xm0104_16b_sample_data(uint32_t, xm_sample_point_t*, const char*, uint32_t, uint32_t);
+static uint32_t xm_load_xm0104_sample_header(xm_sample_t*, bool*, xm_stream_t*, uint32_t, uint32_t);
+static void xm_load_xm0104_8b_sample_data(uint32_t, xm_sample_point_t*, xm_stream_t*, uint32_t, uint32_t);
+static void xm_load_xm0104_16b_sample_data(uint32_t, xm_sample_point_t*, xm_stream_t*, uint32_t, uint32_t);
 
-static bool xm_prescan_mod(const char*, uint32_t, xm_prescan_data_t*);
-static void xm_load_mod(xm_context_t*, const char*, uint32_t, const xm_prescan_data_t*);
+static bool xm_prescan_mod(xm_stream_t*, uint32_t, xm_prescan_data_t*);
+static void xm_load_mod(xm_context_t*, xm_stream_t*, uint32_t, const xm_prescan_data_t*);
 static void xm_load_mod_effect(xm_pattern_slot_t*);
 static void xm_fixup_mod_flt8(xm_context_t*);
 
-static bool xm_prescan_s3m(const char*, uint32_t, xm_prescan_data_t*);
-static void xm_load_s3m(xm_context_t*, const char*, uint32_t, const xm_prescan_data_t*);
-static void xm_load_s3m_instrument(xm_context_t*, uint8_t, bool, const char*, uint32_t, uint32_t);
-static void xm_load_s3m_pattern(xm_context_t*, uint8_t, const uint8_t*, const uint8_t*, const char*, uint32_t, uint32_t);
+static bool xm_prescan_s3m(xm_stream_t*, uint32_t, xm_prescan_data_t*);
+static void xm_load_s3m(xm_context_t*, xm_stream_t*, uint32_t, const xm_prescan_data_t*);
+static void xm_load_s3m_instrument(xm_context_t*, uint8_t, bool, xm_stream_t*, uint32_t, uint32_t);
+static void xm_load_s3m_pattern(xm_context_t*, uint8_t, const uint8_t*, const uint8_t*, xm_stream_t*, uint32_t, uint32_t);
 
 /* ----- Function definitions ----- */
 
-bool xm_prescan_module(const char* __restrict moddata, uint32_t moddata_length,
+bool xm_prescan_module(xm_stream_t* __restrict moddata, uint32_t moddata_length,
                        xm_prescan_data_t* __restrict out) {
-	if(moddata_length >= 10 && memcmp("LIBXMIF\xFF", moddata + 2, 8) == 0) {
-		out->format = XM_FORMAT_XMIF;
-		if(xm_prescan_xmif(moddata, moddata_length, out)) {
-			goto end;
-		} else {
-			return false;
+	if(moddata_length >= 10) {
+		char sig[8];
+		READ_MEMCPY(sig, 2, 8);
+		if (memcmp("LIBXMIF\xFF", sig, 8) == 0) {
+			out->format = XM_FORMAT_XMIF;
+			if(xm_prescan_xmif(moddata, moddata_length, out)) {
+				goto end;
+			} else {
+				return false;
+			}
 		}
 	}
 
-	if(moddata_length >= 60
-	   && memcmp("Extended Module: ", moddata, 17) == 0
-	   && moddata[37] == 0x1A
-	   && moddata[59] == 0x01
-	   && moddata[58] == 0x04) {
-		out->format = XM_FORMAT_XM0104;
-		if(xm_prescan_xm0104(moddata, moddata_length, out)) {
-			goto end;
-		} else {
-			return false;
+	if(moddata_length >= 60) {
+		char sig[17];
+		READ_MEMCPY(sig, 0, 17);
+		if (memcmp("Extended Module: ", sig, 17) == 0
+		   && READ_U8(37) == 0x1A
+		   && READ_U8(59) == 0x01
+		   && READ_U8(58) == 0x04) {
+			out->format = XM_FORMAT_XM0104;
+			if(xm_prescan_xm0104(moddata, moddata_length, out)) {
+				goto end;
+			} else {
+				return false;
+			}
 		}
 	}
 
 	if(moddata_length >= 96) {
-		if(memcmp("\x10\0\0", moddata + 29, 3) == 0
-		   && memcmp("SCRM", moddata + 44, 4) == 0) {
+		char sig1[3], sig2[4];
+		READ_MEMCPY(sig1, 29, 3);
+		READ_MEMCPY(sig2, 44, 4);
+		if(memcmp("\x10\0\0", sig1, 3) == 0
+		   && memcmp("SCRM", sig2, 4) == 0) {
 			out->format = XM_FORMAT_S3M;
 			if(xm_prescan_s3m(moddata, moddata_length, out)) {
 				goto end;
@@ -185,33 +208,39 @@ bool xm_prescan_module(const char* __restrict moddata, uint32_t moddata_length,
 		out->format = XM_FORMAT_MOD;
 		bool load = true;
 
-		const char chn = moddata[150+31*30];
-		const char chn2 = moddata[151+31*30];
-		const char chn3 = moddata[153+31*30];
+		const char chn = READ_U8(150+31*30);
+		const char chn2 = READ_U8(151+31*30);
+		const char chn3 = READ_U8(153+31*30);
 
-		if(memcmp("M.K.", moddata + 150+31*30, 4) == 0
-		   || memcmp("M!K!", moddata + 150+31*30, 4) == 0
-		   || memcmp("FLT4", moddata + 150+31*30, 4) == 0) {
+		char sig4[4];
+		READ_MEMCPY(sig4, 150+31*30, 4);
+
+		char sig_cn[2];
+		READ_MEMCPY(sig_cn, 152+31*30, 2);
+
+		if(memcmp("M.K.", sig4, 4) == 0
+		   || memcmp("M!K!", sig4, 4) == 0
+		   || memcmp("FLT4", sig4, 4) == 0) {
 			out->num_channels = 4;
-		} else if(memcmp("CD81", moddata + 150+31*30, 4) == 0
-		          || memcmp("OCTA", moddata + 150+31*30, 4) == 0
-		          || memcmp("OKTA", moddata + 150+31*30, 4) == 0) {
+		} else if(memcmp("CD81", sig4, 4) == 0
+		          || memcmp("OCTA", sig4, 4) == 0
+		          || memcmp("OKTA", sig4, 4) == 0) {
 			out->num_channels = 8;
-		} else if(memcmp("FLT8", moddata + 150+31*30, 4) == 0) {
+		} else if(memcmp("FLT8", sig4, 4) == 0) {
 			/* Load FLT8 patterns as 8 channels, 32 rows. Merge them
 			   later in xm_fixup_mod_flt8(). */
 			out->num_channels = 8;
 			out->format = XM_FORMAT_MOD_FLT8;
 		} else if(chn >= '1' && chn <= '9'
-		   && memcmp("CHN", moddata + 151+31*30, 3) == 0) {
+		   && memcmp("CHN", sig4 + 1, 3) == 0) {
 			out->num_channels = (uint8_t)(chn - '0');
 		} else if(chn >= '1' && chn <= '9' && chn2 >= '0' && chn2 <= '9'
-		   && (memcmp("CH", moddata + 152+31*30, 2) == 0
-		       || memcmp("CN", moddata + 152+31*30, 2) == 0)) {
+		   && (memcmp("CH", sig_cn, 2) == 0
+		       || memcmp("CN", sig_cn, 2) == 0)) {
 			out->num_channels = (uint8_t)
 				(10 * (chn - '0') + chn2 - '0');
 		} else if(chn3 >= '1' && chn3 <= '9'
-		   && memcmp("TDZ", moddata + 150+31*30, 3) == 0) {
+		   && memcmp("TDZ", sig4, 3) == 0) {
 			out->num_channels = (uint8_t)(chn3 - '0');
 		} else {
 			load = false;
@@ -277,7 +306,7 @@ bool xm_prescan_module(const char* __restrict moddata, uint32_t moddata_length,
 
 xm_context_t* xm_create_context(char* __restrict mempool,
                                 const xm_prescan_data_t* __restrict p,
-                                const char* __restrict moddata,
+                                xm_stream_t* __restrict moddata,
                                 uint32_t moddata_length) {
 	/* Make sure we are not misaligning data by accident */
 	ASSERT_ALIGNED(mempool, xm_context_t);
@@ -638,7 +667,7 @@ xm_context_t* xm_restore_context(char* data) {
    are read.
    */
 
-static bool xm_prescan_xmif(const char* __restrict moddata,
+static bool xm_prescan_xmif(xm_stream_t* __restrict moddata,
                             uint32_t moddata_length,
                             xm_prescan_data_t* __restrict out) {
 	if(READ_U8(1) > 0) {
@@ -663,7 +692,7 @@ static bool xm_prescan_xmif(const char* __restrict moddata,
 }
 
 static void xm_load_xmif(xm_context_t* __restrict ctx,
-                         const char* __restrict moddata,
+                         xm_stream_t* __restrict moddata,
                          uint32_t moddata_length) {
 	uint32_t offset = (uint32_t)(READ_U8(0) << 3);
 	uint16_t pattern_sz = (uint16_t)(READ_U8(0x20) << 3),
@@ -977,7 +1006,7 @@ void xm_save_context(const xm_context_t* __restrict ctx, char* __restrict out) {
 
 /* ----- Fasttracker II .XM (XM 0104): little endian ----- */
 
-static bool xm_prescan_xm0104(const char* __restrict moddata,
+static bool xm_prescan_xm0104(xm_stream_t* __restrict moddata,
                               uint32_t moddata_length,
                               xm_prescan_data_t* __restrict out) {
 	uint32_t offset = 60; /* Skip the first header */
@@ -1126,7 +1155,7 @@ static bool xm_prescan_xm0104(const char* __restrict moddata,
 
 static uint32_t xm_load_xm0104_module_header(xm_context_t* ctx,
                                              uint8_t* out_num_instruments,
-                                             const char* moddata,
+                                             xm_stream_t* moddata,
                                              uint32_t moddata_length) {
 	uint32_t offset = 0;
 	xm_module_t* mod = &(ctx->module);
@@ -1217,7 +1246,7 @@ static uint32_t xm_load_xm0104_module_header(xm_context_t* ctx,
 
 static uint32_t xm_load_xm0104_pattern(xm_context_t* ctx,
                                        xm_pattern_t* pat,
-                                       const char* moddata,
+                                       xm_stream_t* moddata,
                                        uint32_t moddata_length,
                                        uint32_t offset) {
 	uint16_t packed_patterndata_size = READ_U16(offset + 7);
@@ -1386,7 +1415,7 @@ static uint32_t xm_load_xm0104_pattern(xm_context_t* ctx,
 
 static uint32_t xm_load_xm0104_instrument(xm_context_t* ctx,
                                           __attribute__((unused)) xm_instrument_t* instr,
-                                          const char* moddata,
+                                          xm_stream_t* moddata,
                                           uint32_t moddata_length,
                                           uint32_t offset) {
 	#if XM_STRINGS
@@ -1435,7 +1464,7 @@ static uint32_t xm_load_xm0104_instrument(xm_context_t* ctx,
 
 	#if HAS_FEATURE(FEATURE_VOLUME_ENVELOPES)
 	xm_load_xm0104_envelope_points(&instr->volume_envelope,
-	                               moddata + offset + 129);
+	                               moddata, offset + 129);
 	instr->volume_envelope.num_points = READ_U8(offset + 225);
 	instr->volume_envelope.sustain_point = READ_U8(offset + 227);
 	instr->volume_envelope.loop_start_point = READ_U8(offset + 228);
@@ -1447,7 +1476,7 @@ static uint32_t xm_load_xm0104_instrument(xm_context_t* ctx,
 
 	#if HAS_PANNING && HAS_FEATURE(FEATURE_PANNING_ENVELOPES)
 	xm_load_xm0104_envelope_points(&instr->panning_envelope,
-	                               moddata + offset + 177);
+	                               moddata, offset + 177);
 	instr->panning_envelope.num_points = READ_U8(offset + 226);
 	instr->panning_envelope.sustain_point = READ_U8(offset + 230);
 	instr->panning_envelope.loop_start_point = READ_U8(offset + 231);
@@ -1551,12 +1580,13 @@ static uint32_t xm_load_xm0104_instrument(xm_context_t* ctx,
 }
 
 static void xm_load_xm0104_envelope_points(xm_envelope_t* env,
-                                           const char* moddata) {
+                                           xm_stream_t* moddata,
+                                           uint32_t moddata_offset) {
 	uint32_t moddata_length = MAX_ENVELOPE_POINTS * 4;
 	uint16_t env_val;
 	for(uint8_t i = 0; i < MAX_ENVELOPE_POINTS; ++i) {
-		env->points[i].frame = READ_U16(4u * i);
-		env_val = READ_U16(4u * i + 2u);
+		env->points[i].frame = stream_read_u8(moddata, moddata_offset + 4u * i) | (stream_read_u8(moddata, moddata_offset + 4u * i + 1u) << 8);
+		env_val = stream_read_u8(moddata, moddata_offset + 4u * i + 2u) | (stream_read_u8(moddata, moddata_offset + 4u * i + 3u) << 8);
 		if(env_val > MAX_ENVELOPE_VALUE) {
 			NOTICE("clamped invalid envelope pt value (%u -> %u)",
 			       env_val, MAX_ENVELOPE_VALUE);
@@ -1631,7 +1661,7 @@ static void xm_check_and_fix_envelope(xm_envelope_t* env, uint8_t flags) {
 }
 
 static uint32_t xm_load_xm0104_sample_header(xm_sample_t* sample, bool* is_16bit,
-                                             const char* moddata,
+                                             xm_stream_t* moddata,
                                              uint32_t moddata_length,
                                              uint32_t offset) {
 	sample->length = READ_U32(offset);
@@ -1712,7 +1742,7 @@ static uint32_t xm_load_xm0104_sample_header(xm_sample_t* sample, bool* is_16bit
 
 static void xm_load_xm0104_8b_sample_data(uint32_t length,
                                           xm_sample_point_t* out,
-                                          const char* moddata,
+                                          xm_stream_t* moddata,
                                           uint32_t moddata_length,
                                           uint32_t offset) {
 	int8_t v = 0;
@@ -1726,7 +1756,7 @@ static void xm_load_xm0104_8b_sample_data(uint32_t length,
 
 static void xm_load_xm0104_16b_sample_data(uint32_t length,
                                            xm_sample_point_t* out,
-                                           const char* moddata,
+                                           xm_stream_t* moddata,
                                            uint32_t moddata_length,
                                            uint32_t offset) {
 	int16_t v = 0;
@@ -1737,7 +1767,7 @@ static void xm_load_xm0104_16b_sample_data(uint32_t length,
 }
 
 static void xm_load_xm0104(xm_context_t* ctx,
-                           const char* moddata, uint32_t moddata_length) {
+                           xm_stream_t* moddata, uint32_t moddata_length) {
 	/* Read module header */
 	uint8_t num_instruments;
 	uint32_t offset = xm_load_xm0104_module_header(ctx, &num_instruments,
@@ -1798,7 +1828,7 @@ static void xm_load_xm0104(xm_context_t* ctx,
 
 /* ----- Amiga .MOD (M.K., xCHN, etc.): big endian ------ */
 
-static bool xm_prescan_mod(const char* __restrict moddata,
+static bool xm_prescan_mod(xm_stream_t* __restrict moddata,
                            uint32_t moddata_length,
                            xm_prescan_data_t* __restrict p) {
 	assert(p->num_instruments > 0 && p->num_instruments <= MAX_INSTRUMENTS);
@@ -1846,7 +1876,7 @@ static bool xm_prescan_mod(const char* __restrict moddata,
 }
 
 static void xm_load_mod(xm_context_t* __restrict ctx,
-                        const char* __restrict moddata, uint32_t moddata_length,
+                        xm_stream_t* __restrict moddata, uint32_t moddata_length,
                         const xm_prescan_data_t* __restrict p) {
 	#if XM_STRINGS
 	static_assert(MODULE_NAME_LENGTH >= 21); /* +1 for NUL */
@@ -2250,7 +2280,7 @@ static void xm_fixup_mod_flt8(xm_context_t* ctx) {
    https://wiki.openmpt.org/Manual:_Effect_Reference#S3M_Effect_Commands
  */
 
-static bool xm_prescan_s3m(const char* __restrict moddata,
+static bool xm_prescan_s3m(xm_stream_t* __restrict moddata,
                            uint32_t moddata_length,
                            xm_prescan_data_t* __restrict out) {
 	uint16_t pot_length = READ_U16(32);
@@ -2326,7 +2356,7 @@ static bool xm_prescan_s3m(const char* __restrict moddata,
 }
 
 static void xm_load_s3m(xm_context_t* __restrict ctx,
-                        const char* __restrict moddata,
+                        xm_stream_t* __restrict moddata,
                         uint32_t moddata_length,
                         const xm_prescan_data_t* __restrict p) {
 	__attribute__((unused)) uint16_t tracker_version = READ_U16(40);
@@ -2524,7 +2554,7 @@ static void xm_load_s3m(xm_context_t* __restrict ctx,
 
 void xm_load_s3m_instrument(xm_context_t* __restrict ctx,
                             uint8_t idx, bool signed_smp_data,
-                            const char* __restrict moddata,
+                            xm_stream_t* __restrict moddata,
                             uint32_t moddata_length,
                             uint32_t offset) {
 	#if XM_STRINGS
@@ -2626,7 +2656,7 @@ static void xm_load_s3m_pattern(xm_context_t* __restrict ctx,
                                 uint8_t patidx,
                                 const uint8_t* __restrict channel_settings,
                                 const uint8_t* __restrict channel_map,
-                                const char* __restrict moddata,
+                                xm_stream_t* __restrict moddata,
                                 uint32_t moddata_length,
                                 uint32_t offset) {
 	xm_pattern_t* pat = ctx->patterns + patidx;

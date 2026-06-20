@@ -9,6 +9,7 @@ public:
         std::function<void()> on_start_playing;
         std::function<void()> on_stop_playing;
         std::function<void(const std::string&)> on_display_string;
+        std::function<bool(const std::string&)> on_load_xm;
     };
 
     enum class Mode {
@@ -41,4 +42,5 @@ private:
     static int api_post_handler(void* req);
     static int api_files_get_handler(void* req);
     static int api_upload_post_handler(void* req);
+    static int api_download_get_handler(void* req);
 };
