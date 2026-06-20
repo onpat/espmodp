@@ -23,8 +23,11 @@ public:
     void generate16(int16_t* output, uint16_t num_samples);
     void generate8(int8_t* output, uint16_t num_samples);
 
-    void set_volume(float vol) { master_volume = vol; }
+    void set_volume(float vol);
     float get_volume() const { return master_volume; }
+
+    uint8_t get_loop_count() const;
+    void set_max_loop_count(uint8_t loopcnt);
 
     void start_playing(uint16_t chunk_samples, std::function<void(int16_t*, uint16_t)> callback);
     void stop_playing();
@@ -33,6 +36,20 @@ public:
     bool init_external_i2s(int bck_io_num, int ws_io_num, int data_out_num);
     void output_internal_dac(int16_t* buffer, uint16_t samples);
     void output_external_i2s(int16_t* buffer, uint16_t samples);
+
+    bool init_pcm5122(int sda_io_num, int scl_io_num);
+    void test_i2c();
+    void set_pcm5122_volume(uint8_t left, uint8_t right);
+    void set_pcm5122_mute(bool mute);
+
+    enum class Pcm5122DspProgram : uint8_t {
+        FirInterpolation = 1,
+        LowLatencyIir = 2,
+        HighAttenuationFir = 3,
+        FixedProcessFlow = 5,
+        RingingLessLowLatencyFir = 7
+    };
+    void set_pcm5122_dsp_program(Pcm5122DspProgram dsp_program);
 
     bool dac_oversampling = true;
     bool dac_dither = true;
@@ -49,6 +66,7 @@ private:
 
     dac_continuous_handle_t dac_handle;
     i2s_chan_handle_t i2s_tx_handle;
+    bool pcm5122_initialized = false;
 
     float master_volume;
 

@@ -38,7 +38,7 @@ static const char* index_html = R"rawliteral(
             });
         }
         function startPlaying() { sendPost('start_playing', {}); }
-        function stopPlaying() { sendPost('stop_playing', {}); }
+        function pausePlaying() { sendPost('stop_playing', {}); }
         function displayString() {
             var msg = document.getElementById('msg').value;
             sendPost('display_string', { message: msg });
@@ -49,7 +49,7 @@ static const char* index_html = R"rawliteral(
                 list.innerHTML = '';
                 files.forEach(f => {
                     const li = document.createElement('li');
-                    li.innerHTML = '<a href="/api/download?filename=' + encodeURIComponent(f.name) + '">' + f.name + '</a> (' + f.size + ' bytes) <button onclick="loadXmFile(\'' + f.name + '\')">Load</button> <button onclick="deleteFile(\'' + f.name + '\')">Delete</button>';
+                    li.innerHTML = '<a href="/api/download?filename=' + encodeURIComponent(f.name) + '">' + f.name + '</a> (' + f.size + ' bytes) <button onclick="playFile(\'' + f.name + '\')">Play</button> <button onclick="deleteFile(\'' + f.name + '\')">Delete</button>';
                     list.appendChild(li);
                 });
             });
@@ -57,18 +57,31 @@ static const char* index_html = R"rawliteral(
         function deleteFile(name) {
             sendPost('delete_file', { filename: name }).then(() => setTimeout(loadFiles, 500));
         }
-        function loadXmFile(name) {
-            sendPost('load_xm', { filename: name }).then(r => {
+        function playFile(name) {
+            sendPost('play_file', { filename: name }).then(r => {
                 if (!r.ok) {
-                    r.json().then(data => alert('Error: ' + data.error)).catch(() => alert('Load failed'));
-                } else {
-                    alert('Loaded ' + name);
+                    r.json().then(data => alert('Error: ' + data.error)).catch(() => alert('Play failed'));
                 }
             });
         }
         function setVolume() {
             var vol = document.getElementById('volumeSlider').value;
             sendPost('set_volume', { volume: parseFloat(vol) / 100.0 });
+        }
+        function toggleLoop() {
+            var loop = document.getElementById('loopCheckbox').checked;
+            sendPost('set_loop', { loop: loop });
+        }
+        function checkStatus() {
+            fetch('/api/status').then(r => r.json()).then(status => {
+                var el = document.getElementById('playingSong');
+                if (status.is_playing) {
+                    el.innerText = 'Playing: ' + status.playing_file;
+                } else {
+                    el.innerText = 'Paused';
+                }
+                document.getElementById('loopCheckbox').checked = status.loop;
+            }).catch(() => {});
         }
         function uploadFile() {
             const fileInput = document.getElementById('fileInput');
@@ -88,13 +101,18 @@ static const char* index_html = R"rawliteral(
                 } else alert('Upload failed');
             });
         }
-        window.onload = loadFiles;
+        window.onload = function() {
+            loadFiles();
+            setInterval(checkStatus, 1000);
+        };
     </script>
 </head>
 <body>
     <h1>ESP32 Control Panel</h1>
+    <h3 id="playingSong">Unknown</h3>
     <button onclick="startPlaying()">Start Playing</button><br>
-    <button onclick="stopPlaying()">Stop Playing</button><br>
+    <button onclick="pausePlaying()">Pause</button><br>
+    <input type="checkbox" id="loopCheckbox" onchange="toggleLoop()"> <label for="loopCheckbox">Loop</label><br>
     <hr>
     <input type="text" id="msg" placeholder="Message to display"><br>
     <button onclick="displayString()">Display String</button>
@@ -136,7 +154,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         ESP_LOGI(TAG, "station " MACSTR " leave, AID=%d",
                  MAC2STR(event->mac), event->aid);
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        // Do not connect automatically, we connect manually after scanning
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         esp_wifi_connect();
         ESP_LOGI(TAG, "retry to connect to the AP");
@@ -146,9 +164,17 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     }
 }
 
+static void ensure_netif_initialized() {
+    static bool initialized = false;
+    if (!initialized) {
+        ESP_ERROR_CHECK(esp_netif_init());
+        ESP_ERROR_CHECK(esp_event_loop_create_default());
+        initialized = true;
+    }
+}
+
 bool HttpServer::init_wifi_ap(const std::string& ssid, const std::string& password) {
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    ensure_netif_initialized();
     esp_netif_create_default_wifi_ap();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -176,9 +202,10 @@ bool HttpServer::init_wifi_ap(const std::string& ssid, const std::string& passwo
 }
 
 bool HttpServer::init_wifi_sta(const std::string& ssid, const std::string& password) {
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
+    ensure_netif_initialized();
+    
+    esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
+    assert(sta_netif);
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -194,16 +221,70 @@ bool HttpServer::init_wifi_sta(const std::string& ssid, const std::string& passw
                                                         NULL,
                                                         NULL));
 
-    wifi_config_t wifi_config = {};
-    strncpy((char*)wifi_config.sta.ssid, ssid.c_str(), sizeof(wifi_config.sta.ssid) - 1);
-    strncpy((char*)wifi_config.sta.password, password.c_str(), sizeof(wifi_config.sta.password) - 1);
-    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "wifi_init_sta finished. SSID:%s password:%s", ssid.c_str(), password.c_str());
+    ESP_LOGI(TAG, "Scanning for target router: %s...", ssid.c_str());
+
+    wifi_scan_config_t scan_config = {};
+    scan_config.show_hidden = false;
+    scan_config.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+    
+    // Blocking scan
+    esp_err_t scan_ret = esp_wifi_scan_start(&scan_config, true);
+    
+    bool target_found = false;
+    if (scan_ret == ESP_OK) {
+        uint16_t ap_count = 0;
+        esp_wifi_scan_get_ap_num(&ap_count);
+        if (ap_count > 0) {
+            wifi_ap_record_t* ap_info = new wifi_ap_record_t[ap_count];
+            esp_wifi_scan_get_ap_records(&ap_count, ap_info);
+            for (int i = 0; i < ap_count; i++) {
+                if (strcmp((char *)ap_info[i].ssid, ssid.c_str()) == 0) {
+                    target_found = true;
+                    break;
+                }
+            }
+            delete[] ap_info;
+        }
+    }
+
+    if (target_found) {
+        ESP_LOGI(TAG, "Target router found! Connecting...");
+        
+        wifi_config_t wifi_config = {};
+        strncpy((char*)wifi_config.sta.ssid, ssid.c_str(), sizeof(wifi_config.sta.ssid) - 1);
+        strncpy((char*)wifi_config.sta.password, password.c_str(), sizeof(wifi_config.sta.password) - 1);
+        wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+        ESP_ERROR_CHECK(esp_wifi_connect());
+    } else {
+        ESP_LOGW(TAG, "Target router NOT found. Switching to AP mode...");
+        
+        esp_wifi_stop();
+        
+        esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
+        assert(ap_netif);
+
+        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+
+        std::string fallback_ssid = "ESP32-AP";
+        std::string fallback_password = "";
+
+        wifi_config_t ap_config = {};
+        strncpy((char*)ap_config.ap.ssid, fallback_ssid.c_str(), sizeof(ap_config.ap.ssid) - 1);
+        ap_config.ap.ssid_len = fallback_ssid.length();
+        strncpy((char*)ap_config.ap.password, fallback_password.c_str(), sizeof(ap_config.ap.password) - 1);
+        ap_config.ap.max_connection = 4;
+        ap_config.ap.authmode = fallback_password.empty() ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
+
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+        ESP_ERROR_CHECK(esp_wifi_start());
+        ESP_LOGI(TAG, "AP Started successfully. SSID: %s", fallback_ssid.c_str());
+    }
+
     return true;
 }
 
@@ -261,17 +342,19 @@ int HttpServer::api_post_handler(void* req_v) {
             if (cJSON_IsString(filename) && (filename->valuestring != NULL)) {
                 std::string path = std::string("/lfs/") + filename->valuestring;
                 unlink(path.c_str());
+                if (server->callbacks_.on_files_changed) {
+                    server->callbacks_.on_files_changed();
+                }
             }
-        } else if (strcmp(action->valuestring, "load_xm") == 0) {
+        } else if (strcmp(action->valuestring, "play_file") == 0) {
             cJSON *filename = cJSON_GetObjectItem(json, "filename");
             if (cJSON_IsString(filename) && (filename->valuestring != NULL)) {
-                std::string path = std::string("/lfs/") + filename->valuestring;
-                if (server->callbacks_.on_load_xm) {
-                    if (!server->callbacks_.on_load_xm(path)) {
+                if (server->callbacks_.on_play_file) {
+                    if (!server->callbacks_.on_play_file(filename->valuestring)) {
                         cJSON_Delete(json);
                         httpd_resp_set_status(req, HTTPD_500);
                         httpd_resp_set_type(req, "application/json");
-                        httpd_resp_send(req, "{\"error\":\"Load failed or out of memory\"}", HTTPD_RESP_USE_STRLEN);
+                        httpd_resp_send(req, "{\"error\":\"Play failed\"}", HTTPD_RESP_USE_STRLEN);
                         return ESP_OK;
                     }
                 }
@@ -281,6 +364,13 @@ int HttpServer::api_post_handler(void* req_v) {
             if (cJSON_IsNumber(vol)) {
                 if (server->callbacks_.on_set_volume) {
                     server->callbacks_.on_set_volume((float)vol->valuedouble);
+                }
+            }
+        } else if (strcmp(action->valuestring, "set_loop") == 0) {
+            cJSON *loop = cJSON_GetObjectItem(json, "loop");
+            if (cJSON_IsBool(loop)) {
+                if (server->callbacks_.on_set_loop) {
+                    server->callbacks_.on_set_loop(cJSON_IsTrue(loop));
                 }
             }
         }
@@ -337,6 +427,14 @@ bool HttpServer::start_webserver() {
             .user_ctx  = this
         };
         httpd_register_uri_handler(server, &uri_download);
+
+        httpd_uri_t uri_status = {
+            .uri       = "/api/status",
+            .method    = HTTP_GET,
+            .handler   = (esp_err_t (*)(httpd_req_t *))api_status_get_handler,
+            .user_ctx  = this
+        };
+        httpd_register_uri_handler(server, &uri_status);
 
         server_handle_ = server;
         return true;
@@ -437,6 +535,11 @@ int HttpServer::api_upload_post_handler(void* req_v) {
     }
     fclose(f);
     
+    HttpServer* server = (HttpServer*)req->user_ctx;
+    if (server->callbacks_.on_files_changed) {
+        server->callbacks_.on_files_changed();
+    }
+    
     httpd_resp_send(req, "{\"status\":\"ok\"}", HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }
@@ -485,5 +588,19 @@ int HttpServer::api_download_get_handler(void* req_v) {
 
     fclose(f);
     httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
+
+int HttpServer::api_status_get_handler(void* req_v) {
+    httpd_req_t *req = (httpd_req_t *)req_v;
+    HttpServer* server = (HttpServer*)req->user_ctx;
+    
+    std::string status_json = "{}";
+    if (server->callbacks_.on_get_status) {
+        status_json = server->callbacks_.on_get_status();
+    }
+    
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, status_json.c_str(), HTTPD_RESP_USE_STRLEN);
     return ESP_OK;
 }

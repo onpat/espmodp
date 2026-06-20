@@ -108,44 +108,6 @@ void init_lcd()
     ESP_LOGI(TAG, "LCD initialized");
 }
 
-void draw_bitmap_int16(int x, int y, int width, int height, const int16_t *pixels)
-{
-    if (!s_panel_handle) {
-        ESP_LOGE(TAG, "LCD panel not initialized");
-        return;
-    }
-    if (!pixels || width <= 0 || height <= 0) {
-        ESP_LOGE(TAG, "Invalid bitmap");
-        return;
-    }
-
-    const size_t pixel_count = static_cast<size_t>(width) * height;
-    uint8_t *buffer = static_cast<uint8_t *>(heap_caps_malloc(
-        pixel_count * 2,
-        MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
-    if (!buffer) {
-        ESP_LOGE(TAG, "Failed to allocate bitmap buffer");
-        return;
-    }
-
-    for (size_t i = 0; i < pixel_count; ++i) {
-        const int16_t color = pixels[i];
-        buffer[i * 2] = static_cast<uint8_t>((color >> 8) & 0xFF);
-        buffer[i * 2 + 1] = static_cast<uint8_t>(color & 0xFF);
-    }
-
-    ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(
-        s_panel_handle,
-        x,
-        y,
-        x + width,
-        y + height,
-        buffer));
-    wait_for_color_transfer();
-
-    free(buffer);
-}
-
 void draw_bitmap(int x, int y, int width, int height, const uint16_t *pixels)
 {
     if (!s_panel_handle) {
@@ -186,37 +148,7 @@ void draw_bitmap(int x, int y, int width, int height, const uint16_t *pixels)
 
 void fill_screen(uint16_t color)
 {
-    if (!s_panel_handle) {
-        ESP_LOGE(TAG, "LCD panel not initialized");
-        return;
-    }
-
-    const size_t pixel_count = static_cast<size_t>(kPanelWidth) * kPanelHeight;
-    uint8_t *buffer = static_cast<uint8_t *>(heap_caps_malloc(
-        pixel_count * 2,
-        MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
-    if (!buffer) {
-        ESP_LOGE(TAG, "Failed to allocate framebuffer");
-        return;
-    }
-
-    const uint8_t lo = static_cast<uint8_t>(color & 0xFF);
-    const uint8_t hi = static_cast<uint8_t>((color >> 8) & 0xFF);
-    for (size_t i = 0; i < pixel_count * 2; i += 2) {
-        buffer[i] = hi;
-        buffer[i + 1] = lo;
-    }
-
-    ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(
-        s_panel_handle,
-        0,
-        0,
-        kPanelWidth,
-        kPanelHeight,
-        buffer));
-    wait_for_color_transfer();
-
-    free(buffer);
+    draw_rectangle(0, 0, kPanelWidth, kPanelHeight, color);
 }
 
 void draw_rectangle(int x, int y, int width, int height, uint16_t color)
@@ -229,7 +161,9 @@ void draw_rectangle(int x, int y, int width, int height, uint16_t color)
         return;
     }
 
-    const size_t pixel_count = static_cast<size_t>(width) * height;
+    const int chunk_lines = 8;
+    const int lines_to_alloc = (height < chunk_lines) ? height : chunk_lines;
+    const size_t pixel_count = static_cast<size_t>(width) * lines_to_alloc;
     uint8_t *buffer = static_cast<uint8_t *>(heap_caps_malloc(
         pixel_count * 2,
         MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL));
@@ -245,14 +179,17 @@ void draw_rectangle(int x, int y, int width, int height, uint16_t color)
         buffer[i + 1] = lo;
     }
 
-    ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(
-        s_panel_handle,
-        x,
-        y,
-        x + width,
-        y + height,
-        buffer));
-    wait_for_color_transfer();
+    for (int row = 0; row < height; row += lines_to_alloc) {
+        int lines = (row + lines_to_alloc > height) ? (height - row) : lines_to_alloc;
+        ESP_ERROR_CHECK(esp_lcd_panel_draw_bitmap(
+            s_panel_handle,
+            x,
+            y + row,
+            x + width,
+            y + row + lines,
+            buffer));
+        wait_for_color_transfer();
+    }
 
     free(buffer);
 }

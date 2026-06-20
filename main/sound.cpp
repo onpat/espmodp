@@ -5,8 +5,24 @@
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include <cmath>
+#include "driver/i2c_master.h"
 
 static const char* TAG = "Sound";
+
+constexpr uint8_t kPcm5122Addr = 0x4C;
+
+static i2c_master_bus_handle_t i2c_bus_handle = nullptr;
+static i2c_master_dev_handle_t pcm5122_handle = nullptr;
+
+static esp_err_t pcm5122_write_reg(uint8_t reg, uint8_t val) {
+    if (!pcm5122_handle) return ESP_FAIL;
+    uint8_t data[2] = {reg, val};
+    esp_err_t err = i2c_master_transmit(pcm5122_handle, data, 2, -1);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "I2C Write failed at reg 0x%02x: %s", reg, esp_err_to_name(err));
+    }
+    return err;
+}
 
 Sound::Sound() : xm_ctx(nullptr), xm_pool(nullptr), play_callback(nullptr), play_chunk_samples(0), play_task_handle(nullptr), playing(false), gptimer(nullptr), dac_handle(nullptr), i2s_tx_handle(nullptr), master_volume(1.0f) {
     ESP_LOGI(TAG, "Initializing libxm (Sound constructor)");
@@ -51,6 +67,7 @@ bool Sound::load(const uint8_t* data, size_t size) {
     uint32_t ctx_size = xm_size_for_context(prescan);
     ESP_LOGI(TAG, "Context size required: %lu bytes", (unsigned long)ctx_size);
 
+    xm_ctx = nullptr; // Ensure we don't access it while reallocating
     if (xm_pool) {
         heap_caps_free(xm_pool);
         xm_pool = nullptr;
@@ -109,6 +126,7 @@ bool Sound::load_from_file(const char* filepath) {
     uint32_t ctx_size = xm_size_for_context(prescan);
     ESP_LOGI(TAG, "Context size required: %lu bytes", (unsigned long)ctx_size);
 
+    xm_ctx = nullptr; // Ensure we don't access it while reallocating
     if (xm_pool) {
         heap_caps_free(xm_pool);
         xm_pool = nullptr;
@@ -168,6 +186,7 @@ void IRAM_ATTR Sound::generate16(int16_t* output, uint16_t num_samples) {
     xm_generate_samples(xm_ctx, temp_buf, num_samples);
     
     for (uint32_t i = 0; i < (uint32_t)num_samples * 2; ++i) {
+#ifdef ENABLE_SOFTWARE_VOLUME
         float v = temp_buf[i] * master_volume;
         
         // Fast cubic soft clipping approximation: x - (x^3 / 3) for x in [-1, 1]
@@ -179,6 +198,9 @@ void IRAM_ATTR Sound::generate16(int16_t* output, uint16_t num_samples) {
         
         float soft_v = v_clamp - 0.3333333f * v_clamp * v_clamp * v_clamp;
         float scaled = soft_v * 49150.5f; // 32767.0f * 1.5f
+#else
+        float scaled = temp_buf[i] * 32767.0f;
+#endif
         
         int32_t sample_int = static_cast<int32_t>(scaled >= 0.0f ? scaled + 0.5f : scaled - 0.5f);
         
@@ -260,6 +282,10 @@ void Sound::stop_playing() {
     if (playing) {
         playing = false;
         
+        if (pcm5122_initialized) {
+            set_pcm5122_mute(true);
+        }
+        
         if (gptimer) {
             gptimer_stop(gptimer);
             gptimer_disable(gptimer);
@@ -292,6 +318,23 @@ bool IRAM_ATTR Sound::timer_isr_callback(gptimer_handle_t timer, const gptimer_a
 void Sound::play_task(void* arg) {
     Sound* sound = static_cast<Sound*>(arg);
     int16_t* buffer = static_cast<int16_t*>(heap_caps_malloc(sound->play_chunk_samples * 2 * sizeof(int16_t), MALLOC_CAP_DEFAULT));
+    
+    // push empty buffer multiple times to create a silent zone at the start of playback.
+    // This fully flushes out any stale audio from the I2S DMA buffers from the previous 
+    // playback while the DAC is still muted.
+    if (buffer && sound->play_callback) {
+        memset(buffer, 0, sound->play_chunk_samples * 2 * sizeof(int16_t));
+        // Flush DMA with silence while muted
+        for (int i = 0; i < 8; i++) {
+            sound->play_callback(buffer, sound->play_chunk_samples);
+        }
+        
+        // Unmute the DAC now that clean silence is flowing
+        if (sound->pcm5122_initialized) {
+            sound->set_pcm5122_mute(false);
+        }
+        
+    }
     
     while (sound->playing) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -439,4 +482,100 @@ void IRAM_ATTR Sound::output_external_i2s(int16_t* buffer, uint16_t samples) {
     
     size_t bytes_loaded = 0;
     i2s_channel_write(i2s_tx_handle, buffer, samples * 2 * sizeof(int16_t), &bytes_loaded, portMAX_DELAY);
+}
+
+void Sound::test_i2c() {
+    if (!i2c_bus_handle) return;
+    ESP_LOGI(TAG, "Scanning I2C bus...");
+    for (uint8_t i = 1; i < 127; i++) {
+        esp_err_t ret = i2c_master_probe(i2c_bus_handle, i, -1);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "Found I2C device at address 0x%02x", i);
+        }
+    }
+    ESP_LOGI(TAG, "I2C scan complete.");
+}
+
+bool Sound::init_pcm5122(int sda_io_num, int scl_io_num) {
+    i2c_master_bus_config_t i2c_mst_config = {};
+    i2c_mst_config.clk_source = I2C_CLK_SRC_DEFAULT;
+    i2c_mst_config.i2c_port = -1;
+    i2c_mst_config.scl_io_num = static_cast<gpio_num_t>(scl_io_num);
+    i2c_mst_config.sda_io_num = static_cast<gpio_num_t>(sda_io_num);
+    i2c_mst_config.glitch_ignore_cnt = 7;
+    i2c_mst_config.flags.enable_internal_pullup = true;
+
+    if (i2c_new_master_bus(&i2c_mst_config, &i2c_bus_handle) != ESP_OK) return false;
+
+    i2c_device_config_t dev_cfg = {};
+    dev_cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    dev_cfg.device_address = kPcm5122Addr;
+    dev_cfg.scl_speed_hz = 100000;
+    
+    if (i2c_master_bus_add_device(i2c_bus_handle, &dev_cfg, &pcm5122_handle) != ESP_OK) return false;
+
+    test_i2c();
+
+    // Initialize PCM5122
+    if (pcm5122_write_reg(0, 0x00) != ESP_OK) return false;   // Page 0
+    pcm5122_write_reg(2, 0x11);   // Standby
+    pcm5122_write_reg(13, 0x10);  // PLL Reference = BCK
+    pcm5122_write_reg(37, 0x08);  // Ignore SCK Missing error
+    pcm5122_write_reg(2, 0x00);   // Exit Standby
+    
+    pcm5122_initialized = true;
+
+    // Apply initial volume
+    set_volume(master_volume);
+    
+    return true;
+}
+
+uint8_t Sound::get_loop_count() const {
+    if (!xm_ctx) return 0;
+    return xm_get_loop_count(xm_ctx);
+}
+
+void Sound::set_max_loop_count(uint8_t loopcnt) {
+    if (!xm_ctx) return;
+    xm_set_max_loop_count(xm_ctx, loopcnt);
+}
+
+void Sound::set_volume(float vol) {
+    master_volume = vol;
+#ifndef ENABLE_SOFTWARE_VOLUME
+    uint8_t hw_vol = 255;
+    if (vol > 0.00001f) {
+        float db = 20.0f * std::log10(vol);
+        float reg_val = 48.0f - (db * 2.0f);
+        if (reg_val < 0.0f) reg_val = 0.0f;
+        if (reg_val > 255.0f) reg_val = 255.0f;
+        hw_vol = static_cast<uint8_t>(reg_val);
+    }
+    ESP_LOGI(TAG, "Setting hardware volume to %d (from float %f, %.1fdB)", hw_vol, vol, 20.0f * std::log10(vol > 0.00001f ? vol : 0.00001f));
+    set_pcm5122_volume(hw_vol, hw_vol);
+#endif
+}
+
+void Sound::set_pcm5122_volume(uint8_t left, uint8_t right) {
+    if (!pcm5122_initialized) return;
+    pcm5122_write_reg(0, 0x00);
+    pcm5122_write_reg(61, left);
+    pcm5122_write_reg(62, right);
+}
+
+void Sound::set_pcm5122_mute(bool mute) {
+    if (!pcm5122_initialized) return;
+    pcm5122_write_reg(0, 0x00);
+    if (mute) {
+        pcm5122_write_reg(3, 0x11); // Mute left and right
+    } else {
+        pcm5122_write_reg(3, 0x00); // Unmute left and right
+    }
+}
+
+void Sound::set_pcm5122_dsp_program(Pcm5122DspProgram dsp_program) {
+    if (!pcm5122_initialized) return;
+    pcm5122_write_reg(0, 0x00);
+    pcm5122_write_reg(43, static_cast<uint8_t>(dsp_program));
 }

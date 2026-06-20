@@ -14,10 +14,9 @@
 #include "lcd.hpp"
 #include "textbox.hpp"
 #include "sound.hpp"
+#include "playlist.hpp"
 #include "http_server.hpp"
-
-extern const uint8_t roadblast_xm_start[] asm("_binary_roadblast_xm_start");
-extern const uint8_t roadblast_xm_end[]   asm("_binary_roadblast_xm_end");
+#include "esp_log.h"
 
 namespace {
 constexpr int kScreenWidth = 170;
@@ -27,12 +26,14 @@ constexpr uint16_t kBackground = 0x00F0;
 constexpr uint16_t kWhite = 0xFFFF;
 constexpr const char *kMessage = "hello, world!";
 
-void wait_forever()
+void wait_forever(Playlist& playlist)
 {
     while (true) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        playlist.update();
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
+
 } // namespace
 
 extern "C" void app_main(void)
@@ -50,15 +51,17 @@ extern "C" void app_main(void)
 
     // Initialize libxm, load file and generate output
     static Sound sound;
-    const size_t xm_size = roadblast_xm_end - roadblast_xm_start;
-    if (sound.load(roadblast_xm_start, xm_size)) {
-        sound.set_volume(0.2f);
-        sound.init_internal_dac();
-        const uint16_t chunk_samples = 1024; // increased chunk size for better FreeRTOS task timing
-        sound.start_playing(chunk_samples, [](int16_t* buffer, uint16_t samples) {
-            sound.output_internal_dac(buffer, samples);
-        });
-    }
+    static Playlist playlist(sound);
+
+    // Initialize I2S first so the DAC receives clocks before I2C config
+    sound.init_external_i2s(26, 25, 22);
+    // mod2 should pull up for i2c control!
+    sound.init_pcm5122(5, 19);
+    sound.set_volume(0.1f);
+    sound.set_pcm5122_dsp_program(Sound::Pcm5122DspProgram::FirInterpolation);
+
+    playlist.rescan();
+    playlist.play_next();
 
     auto render_message = [](const std::string& msg) {
         fill_screen(kBackground);
@@ -77,35 +80,56 @@ extern "C" void app_main(void)
 
     static HttpServer http_server;
     HttpServer::Callbacks callbacks;
-    callbacks.on_start_playing = []() {
-        const uint16_t chunk_samples = 1024;
-        sound.start_playing(chunk_samples, [](int16_t* buffer, uint16_t samples) {
-            sound.output_internal_dac(buffer, samples);
-        });
+    callbacks.on_start_playing = [&]() {
+        if (!playlist.is_playing() && playlist.get_current_index() >= 0) {
+            playlist.resume();
+        } else if (!playlist.is_playing() && playlist.get_items().size() > 0) {
+            playlist.play(0);
+        }
     };
-    callbacks.on_stop_playing = []() {
-        sound.stop_playing();
+    callbacks.on_stop_playing = [&]() {
+        playlist.stop();
     };
     callbacks.on_display_string = [render_message](const std::string& msg) {
         render_message(msg);
     };
-    callbacks.on_load_xm = [&](const std::string& path) {
-        sound.stop_playing();
-        bool res = sound.load_from_file(path.c_str());
-        if (res) {
-            render_message("Loaded: " + path);
-        } else {
-            render_message("Failed: " + path);
+    callbacks.on_play_file = [&](const std::string& filename) {
+        auto items = playlist.get_items();
+        for (size_t i = 0; i < items.size(); ++i) {
+            if (items[i].filename == filename) {
+                playlist.play(i);
+                render_message("Playing: " + filename);
+                return true;
+            }
         }
-        return res;
+        render_message("Failed: " + filename);
+        return false;
     };
     callbacks.on_set_volume = [&](float vol) {
         sound.set_volume(vol);
+    };
+    callbacks.on_files_changed = [&]() {
+        playlist.rescan();
+    };
+    callbacks.on_set_loop = [&](bool loop) {
+        playlist.set_loop(loop);
+    };
+    callbacks.on_get_status = [&]() -> std::string {
+        std::string json = "{";
+        json += "\"is_playing\":" + std::string(playlist.is_playing() ? "true" : "false") + ",";
+        json += "\"loop\":" + std::string(playlist.get_loop() ? "true" : "false") + ",";
+        json += "\"playing_file\":\"";
+        int idx = playlist.get_current_index();
+        if (idx >= 0 && idx < (int)playlist.get_items().size()) {
+            json += playlist.get_items()[idx].filename;
+        }
+        json += "\"}";
+        return json;
     };
 
     // Host AP mode. This will be accessible from the AP and serve index.html at /
     //http_server.start(HttpServer::Mode::AP, callbacks, "ESP32-AP", "");
     http_server.start(HttpServer::Mode::Client, callbacks, "OpenWrt", "Tudor400");
 
-    wait_forever();
+    wait_forever(playlist);
 }
