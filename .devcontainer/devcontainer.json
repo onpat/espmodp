@@ -11,9 +11,14 @@
 			},
 			"extensions": [
 				"espressif.esp-idf-extension",
-				"espressif.esp-idf-web"
+				"espressif.esp-idf-web",
+				"saoudrizwan.claude-dev",
+				"ms-vscode.cpptools-extension-pack"
 			]
 		}
 	},
-	"runArgs": ["--privileged"]
+	"runArgs": ["--privileged", "--device=/dev/ttyUSB0:/dev/ttyUSB0"],
+	"mounts": [
+    	"source=${localEnv:HOME}/.config/gcloud,target=/root/.config/gcloud,type=bind"
+  	]
 }
