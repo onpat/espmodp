@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <functional>
+#include <vector>
 #include <xm.h>
 #include "driver/gptimer.h"
 #include "driver/dac_continuous.h"
@@ -28,6 +29,9 @@ public:
 
     uint8_t get_loop_count() const;
     void set_max_loop_count(uint8_t loopcnt);
+
+    float get_current_time() const;
+    void skip(float seconds);
 
     void start_playing(uint16_t chunk_samples, std::function<void(int16_t*, uint16_t)> callback);
     void stop_playing();

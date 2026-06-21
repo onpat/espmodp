@@ -39,6 +39,7 @@ static const char* index_html = R"rawliteral(
         }
         function startPlaying() { sendPost('start_playing', {}); }
         function pausePlaying() { sendPost('stop_playing', {}); }
+        function skipForward() { sendPost('skip', {}); }
         function displayString() {
             var msg = document.getElementById('msg').value;
             sendPost('display_string', { message: msg });
@@ -81,6 +82,17 @@ static const char* index_html = R"rawliteral(
                     el.innerText = 'Paused';
                 }
                 document.getElementById('loopCheckbox').checked = status.loop;
+
+                var timeDisplay = document.getElementById('timeDisplay');
+                if (timeDisplay) {
+                    var current = Math.floor(status.current_time || 0);
+                    function fmt(sec) {
+                        var m = Math.floor(sec / 60);
+                        var s = sec % 60;
+                        return m + ':' + (s < 10 ? '0' : '') + s;
+                    }
+                    timeDisplay.innerText = fmt(current);
+                }
             }).catch(() => {});
         }
         function uploadFile() {
@@ -110,8 +122,10 @@ static const char* index_html = R"rawliteral(
 <body>
     <h1>ESP32 Control Panel</h1>
     <h3 id="playingSong">Unknown</h3>
+    <p id="timeDisplay">0:00</p>
     <button onclick="startPlaying()">Start Playing</button><br>
     <button onclick="pausePlaying()">Pause</button><br>
+    <button onclick="skipForward()">Skip</button><br>
     <input type="checkbox" id="loopCheckbox" onchange="toggleLoop()"> <label for="loopCheckbox">Loop</label><br>
     <hr>
     <input type="text" id="msg" placeholder="Message to display"><br>
@@ -372,6 +386,10 @@ int HttpServer::api_post_handler(void* req_v) {
                 if (server->callbacks_.on_set_loop) {
                     server->callbacks_.on_set_loop(cJSON_IsTrue(loop));
                 }
+            }
+        } else if (strcmp(action->valuestring, "skip") == 0) {
+            if (server->callbacks_.on_skip) {
+                server->callbacks_.on_skip();
             }
         }
     }

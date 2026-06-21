@@ -30,6 +30,7 @@ Sound::Sound() : xm_ctx(nullptr), xm_pool(nullptr), play_callback(nullptr), play
 
 Sound::~Sound() {
     stop_playing();
+
     if (xm_pool) {
         heap_caps_free(xm_pool);
         xm_pool = nullptr;
@@ -317,6 +318,7 @@ bool IRAM_ATTR Sound::timer_isr_callback(gptimer_handle_t timer, const gptimer_a
 
 void Sound::play_task(void* arg) {
     Sound* sound = static_cast<Sound*>(arg);
+
     int16_t* buffer = static_cast<int16_t*>(heap_caps_malloc(sound->play_chunk_samples * 2 * sizeof(int16_t), MALLOC_CAP_DEFAULT));
     
     // push empty buffer multiple times to create a silent zone at the start of playback.
@@ -539,6 +541,30 @@ uint8_t Sound::get_loop_count() const {
 void Sound::set_max_loop_count(uint8_t loopcnt) {
     if (!xm_ctx) return;
     xm_set_max_loop_count(xm_ctx, loopcnt);
+}
+
+float Sound::get_current_time() const {
+    if (!xm_ctx) return 0.0f;
+    uint32_t samples = 0;
+    xm_get_position(xm_ctx, nullptr, nullptr, nullptr, &samples);
+    return static_cast<float>(samples) / xm_get_sample_rate(xm_ctx);
+}
+
+void Sound::skip(float seconds) {
+    if (!xm_ctx) return;
+    uint8_t bpm = 125, tempo = 6;
+    xm_get_playing_speed(xm_ctx, &bpm, &tempo);
+    
+    if (tempo == 0) tempo = 1; // Prevent division by zero
+    
+    // Ticks per second = BPM * 0.4
+    // Rows per second = (BPM * 0.4) / tempo
+    float rows_per_sec = (bpm * 0.4f) / tempo;
+    uint16_t rows_to_skip = static_cast<uint16_t>(seconds * rows_per_sec);
+    
+    if (rows_to_skip > 0) {
+        xm_skip_rows(xm_ctx, rows_to_skip);
+    }
 }
 
 void Sound::set_volume(float vol) {

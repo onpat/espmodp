@@ -14,6 +14,7 @@ public:
         std::function<void()> on_files_changed;
         std::function<void(bool)> on_set_loop;
         std::function<std::string()> on_get_status;
+        std::function<void()> on_skip;
     };
 
     enum class Mode {

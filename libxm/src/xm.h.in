@@ -238,6 +238,10 @@ __attribute__((nonnull));
 void xm_seek(xm_context_t*, uint8_t pot, uint8_t row, uint8_t tick)
 __attribute__((nonnull));
 
+/** Fast-forward the player by a number of rows. Useful for skipping over sections without using CPU/memory to render samples. */
+void xm_skip_rows(xm_context_t* ctx, uint16_t num_rows)
+__attribute__((nonnull));
+
 
 
 /** Mute or unmute a channel.

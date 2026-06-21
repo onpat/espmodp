@@ -35,6 +35,27 @@ void xm_seek(xm_context_t* ctx, uint8_t pot, uint8_t row, uint8_t tick) {
 	ctx->remaining_samples_in_tick = 0;
 }
 
+void xm_skip_rows(xm_context_t* ctx, uint16_t num_rows) {
+	while (num_rows > 0) {
+		uint8_t pattern = ctx->module.pattern_table[ctx->current_table_index];
+		uint16_t num_rows_in_pattern = ctx->patterns[pattern].num_rows;
+		
+		if (ctx->current_row + num_rows < num_rows_in_pattern) {
+			ctx->current_row += num_rows;
+			break;
+		} else {
+			num_rows -= (num_rows_in_pattern - ctx->current_row);
+			ctx->current_row = 0;
+			ctx->current_table_index++;
+			if (ctx->current_table_index >= ctx->module.length) {
+				ctx->current_table_index = 0;
+			}
+		}
+	}
+	ctx->current_tick = 0;
+	ctx->remaining_samples_in_tick = 0;
+}
+
 
 
 bool xm_mute_channel(__attribute__((unused)) xm_context_t* ctx,

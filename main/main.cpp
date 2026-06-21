@@ -114,6 +114,10 @@ extern "C" void app_main(void)
     callbacks.on_set_loop = [&](bool loop) {
         playlist.set_loop(loop);
     };
+    callbacks.on_skip = [&]() {
+        ESP_LOGI("Skip", "Skipped 1 seconds of the song!");
+        sound.skip(1.0f);
+    };
     callbacks.on_get_status = [&]() -> std::string {
         std::string json = "{";
         json += "\"is_playing\":" + std::string(playlist.is_playing() ? "true" : "false") + ",";
@@ -123,7 +127,9 @@ extern "C" void app_main(void)
         if (idx >= 0 && idx < (int)playlist.get_items().size()) {
             json += playlist.get_items()[idx].filename;
         }
-        json += "\"}";
+        json += "\",";
+        json += "\"current_time\":" + std::to_string(sound.get_current_time());
+        json += "}";
         return json;
     };
 
