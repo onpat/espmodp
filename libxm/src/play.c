@@ -81,7 +81,7 @@ static void xm_key_off(xm_channel_context_t*) __attribute__((nonnull));
 
 static void xm_row(xm_context_t*) __attribute__((nonnull));
 
-static float xm_sample_at(const xm_context_t*, const xm_sample_t*, uint32_t) __attribute__((warn_unused_result)) __attribute__((nonnull)) __attribute__((const));
+static float xm_sample_at(const xm_context_t*, xm_channel_context_t*, const xm_sample_t*, uint32_t) __attribute__((warn_unused_result)) __attribute__((nonnull));
 static float xm_next_of_sample(xm_context_t*, xm_channel_context_t*) __attribute__((warn_unused_result)) __attribute__((nonnull));
 static void xm_next_of_channel(xm_context_t*, xm_channel_context_t*, float*, float*) __attribute__((nonnull));
 static void xm_sample_unmixed(xm_context_t*, float*) __attribute__((nonnull));
@@ -168,7 +168,7 @@ static int8_t xm_waveform(__attribute__((unused)) uint8_t waveform,
 	#if HAS_FEATURE(FEATURE_WAVEFORM_SINE)
 	case WAVEFORM_SINE:
 		step >>= 2;
-		static constexpr int8_t sin_lut[] = {
+		static const int8_t sin_lut[] = {
 			/* 128*sinf(2πx/64) for x in 0..16 */
 			0, 12, 24, 37, 48, 60, 71, 81,
 			90, 98, 106, 112, 118, 122, 125, 127,
@@ -352,13 +352,13 @@ static void xm_multi_retrig_note(xm_context_t* ctx, xm_channel_context_t* ch,
 		return;
 	}
 
-	static constexpr uint8_t add[] = {
+	static const uint8_t add[] = {
 		0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 4, 8, 16, 0, 0,
 	};
-	static constexpr uint8_t mul[] = {
+	static const uint8_t mul[] = {
 		1, 1, 1, 1, 1, 1, 2, 1, 1, 1, 1, 1, 1, 1, 3, 2,
 	};
-	static constexpr uint16_t inv_mul[] = {
+	static const uint16_t inv_mul[] = {
 		256/1, 256/1, 256/1, 256/1, 256/1, 256/1, 256/2, 256/1, 256/1, 256/1, 256/1, 256/1, 256/1, 256/1, 256/3, 256/2
 	};
 	uint8_t x = (uint8_t)(param >> 4);
@@ -1170,6 +1170,10 @@ static void xm_trigger_note(xm_context_t* ctx, xm_channel_context_t* ch) {
 	ch->latest_trigger = ctx->generated_samples;
 	ch->sample->latest_trigger = ctx->generated_samples;
 	#endif
+
+#if defined(XM_SAMPLE_TYPE_DD4A) || defined(XM_SAMPLE_TYPE_DD8A)
+	ch->decoded_block_idx = 0;
+#endif
 }
 
 static void xm_cut_note(xm_channel_context_t* ch) {
@@ -1835,11 +1839,15 @@ static void xm_tick_effects(__attribute__((unused)) xm_context_t* ctx,
 	}
 }
 
-static float IRAM_ATTR xm_sample_at(const xm_context_t* ctx,
+static float IRAM_ATTR xm_sample_at(const xm_context_t* ctx, xm_channel_context_t* ch,
                           const xm_sample_t* sample, uint32_t k) {
 	assert(k < sample->length);
+#if defined(XM_SAMPLE_TYPE_DD4A) || defined(XM_SAMPLE_TYPE_DD8A)
+	assert(sample->index < ctx->module.samples_data_length);
+#else
 	assert(sample->index + k < ctx->module.samples_data_length);
-	return SAMPLE_DATA(ctx, sample->index + k);
+#endif
+	return SAMPLE_DATA(ctx, ch, sample->index + k);
 }
 
 /* XXX: rename me or merge with xm_next_of_channel */
@@ -1911,11 +1919,11 @@ static float IRAM_ATTR xm_next_of_sample(xm_context_t* ctx, xm_channel_context_t
 
 	assert(a < smp->length);
 	assert(b < smp->length);
-	float u = (float)xm_sample_at(ctx, smp, a);
+	float u = (float)xm_sample_at(ctx, ch, smp, a);
 
 	#if XM_LINEAR_INTERPOLATION
 	/* u = sample_at(a), v = sample_at(b), t = lerp factor (0..1) */
-	u = XM_LERP(u, (float)xm_sample_at(ctx, smp, b), t);
+	u = XM_LERP(u, (float)xm_sample_at(ctx, ch, smp, b), t);
 	#endif
 
 	#if XM_RAMPING
@@ -2023,3 +2031,35 @@ void xm_generate_samples_unmixed(xm_context_t* ctx,
 		xm_sample_unmixed(ctx, out);
 	}
 }
+
+#if defined(XM_SAMPLE_TYPE_DD4A) || defined(XM_SAMPLE_TYPE_DD8A)
+#include <libsac.h>
+
+static float xm_decode_sac(const xm_context_t* ctx, xm_channel_context_t* ch, uint32_t idx, bool is_dd8a) {
+	if(ch == NULL || ch->sample == NULL) return 0.0f;
+	
+	int block_size = is_dd8a ? 16 : 32; // DD4A has 32 samples per block, DD8A has 16
+	int block_idx = (idx - ch->sample->index) / block_size;
+	int offset_in_block = (idx - ch->sample->index) % block_size;
+	
+	if(ch->decoded_block_idx != block_idx + 1) { // block_idx is 0-based, +1 to avoid 0 check
+		sac_packed_data_t* p = ctx->samples_data[ch->sample->index].p;
+		if(p) {
+			sac_decode_channel(ch->decoded_block, p, block_idx * block_size, block_size, 0);
+		} else {
+			__builtin_memset(ch->decoded_block, 0, 32 * sizeof(int16_t));
+		}
+		ch->decoded_block_idx = block_idx + 1;
+	}
+	
+	return (float)ch->decoded_block[offset_in_block] * (1.0f / 32768.f);
+}
+
+float xm_decode_dd4a(const xm_context_t* ctx, struct xm_channel_context_s* ch, uint32_t idx) {
+	return xm_decode_sac(ctx, (xm_channel_context_t*)ch, idx, false);
+}
+
+float xm_decode_dd8a(const xm_context_t* ctx, struct xm_channel_context_s* ch, uint32_t idx) {
+	return xm_decode_sac(ctx, (xm_channel_context_t*)ch, idx, true);
+}
+#endif

@@ -67,7 +67,13 @@ option_and_define(XM_MOD_SOFT_PANNING
 	"Use 80% panning instead of 100% (hard) panning for MOD files" "ON")
 
 set(XM_SAMPLE_TYPE "int16_t" CACHE STRING
-	"Sample type of internal samples (int8_t,int16_t,float)")
+	"Sample type of internal samples (int8_t,int16_t,float,dd4a_t,dd8a_t)")
+
+if(XM_SAMPLE_TYPE STREQUAL "dd4a_t")
+	target_compile_definitions(xm PRIVATE XM_SAMPLE_TYPE_DD4A=1)
+elseif(XM_SAMPLE_TYPE STREQUAL "dd8a_t")
+	target_compile_definitions(xm PRIVATE XM_SAMPLE_TYPE_DD8A=1)
+endif()
 
 set(XM_SAMPLE_RATE "0" CACHE STRING
 	"Output sample rate (0=Configurable via xm_set_sample_rate(), other values=hardcoded, eg 44100 or 48000)")

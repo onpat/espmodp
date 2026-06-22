@@ -37,6 +37,8 @@ extern const uint8_t XM_PRESCAN_DATA_SIZE;
  * );
  *
  * Do not use sizeof(), unsigned types or int32 might be eventually added. */
+typedef struct { void* p; } dd4a_t;
+typedef struct { void* p; } dd8a_t;
 typedef @XM_SAMPLE_TYPE@ xm_sample_point_t;
 
 

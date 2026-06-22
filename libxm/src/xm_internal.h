@@ -10,6 +10,7 @@
 #include <math.h>
 #include <string.h>
 #include "esp_attr.h"
+#include "esp_heap_caps.h"
 #define ckd_add(ptr, a, b) __builtin_add_overflow((a), (b), (ptr))
 #define ckd_sub(ptr, a, b) __builtin_sub_overflow((a), (b), (ptr))
 #define ckd_mul(ptr, a, b) __builtin_mul_overflow((a), (b), (ptr))
@@ -59,8 +60,13 @@ static inline float xm_exp2f(float x) {
 
 static_assert(_Generic((xm_sample_point_t){},
                         int8_t: true, int16_t: true, float: true,
+                        dd4a_t: true, dd8a_t: true,
                         default: false),
                "Unsupported value of XM_SAMPLE_TYPE");
+
+struct xm_channel_context_s;
+float xm_decode_dd4a(const xm_context_t* ctx, struct xm_channel_context_s* ch, uint32_t idx);
+float xm_decode_dd8a(const xm_context_t* ctx, struct xm_channel_context_s* ch, uint32_t idx);
 static_assert(XM_LOOPING_TYPE >= 0 && XM_LOOPING_TYPE <= 2,
               "Invalid value of XM_LOOPING_TYPE");
 static_assert(XM_LOOPING_TYPE != 1 || !HAS_EFFECT(0xB),
@@ -201,7 +207,7 @@ static_assert(HAS_FEATURE(FEATURE_LINEAR_FREQUENCIES)
 #define MAX_NOTE 96
 #define MAX_ENVELOPE_POINTS 12
 #define MAX_ROWS_PER_PATTERN 256
-#define RAMPING_POINTS 255
+#define RAMPING_POINTS 128
 #define MAX_VOLUME 64
 #define MAX_FADEOUT_VOLUME 32768
 #define MAX_PANNING 256 /* cannot be stored in a uint8_t, this is ft2
@@ -665,6 +671,11 @@ struct xm_channel_context_s {
 	#define BASE_PANNING(ctx, i) DEFAULT_CHANNEL_PANNING(&ctx->module, i)
 	#endif
 
+#if defined(XM_SAMPLE_TYPE_DD4A) || defined(XM_SAMPLE_TYPE_DD8A)
+	int decoded_block_idx;
+	int16_t decoded_block[32];
+#endif
+
 	uint8_t orig_note; /* Last valid note seen in a slot. Could be 0. */
 
 	#define HAS_FINETUNES (HAS_FEATURE(FEATURE_SAMPLE_FINETUNES)	\
@@ -935,10 +946,16 @@ struct xm_context_s {
 
 	xm_sample_t* samples;
 
-	#define SAMPLE_DATA(ctx, idx) _Generic((xm_sample_point_t){}, \
+	#if defined(XM_SAMPLE_TYPE_DD4A)
+	#define SAMPLE_DATA(ctx, ch, idx) xm_decode_dd4a(ctx, ch, idx)
+	#elif defined(XM_SAMPLE_TYPE_DD8A)
+	#define SAMPLE_DATA(ctx, ch, idx) xm_decode_dd8a(ctx, ch, idx)
+	#else
+	#define SAMPLE_DATA(ctx, ch, idx) _Generic((xm_sample_point_t){}, \
 			int8_t: (float)(ctx)->samples_data[idx] * (1.0f / 128.f), \
 			int16_t: (float)(ctx)->samples_data[idx] * (1.0f / 32768.f), \
 			float: (ctx)->samples_data[idx])
+	#endif
 	xm_sample_point_t* samples_data;
 
 	xm_channel_context_t* channels;

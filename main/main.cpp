@@ -93,15 +93,26 @@ extern "C" void app_main(void)
     static Sound sound;
     static Playlist playlist(sound);
 
+#if defined(CONFIG_XM_SAMPLE_FLOAT)
+    ESP_LOGI("main", "Current XM_SAMPLE_TYPE is Float");
+#elif defined(CONFIG_XM_SAMPLE_INT16)
+    ESP_LOGI("main", "Current XM_SAMPLE_TYPE is Int16");
+#elif defined(CONFIG_XM_SAMPLE_INT8)
+    ESP_LOGI("main", "Current XM_SAMPLE_TYPE is Int8");
+#elif defined(CONFIG_XM_SAMPLE_DD4A)
+    ESP_LOGI("main", "Current XM_SAMPLE_TYPE is DD4A");
+#elif defined(CONFIG_XM_SAMPLE_DD8A)
+    ESP_LOGI("main", "Current XM_SAMPLE_TYPE is DD8A");
+#else
+    ESP_LOGI("main", "Current XM_SAMPLE_TYPE is Unknown");
+#endif
+
     // Initialize I2S first so the DAC receives clocks before I2C config
     sound.init_external_i2s(CONFIG_I2S_BCK_GPIO, CONFIG_I2S_WS_GPIO, CONFIG_I2S_DOUT_GPIO);
     // mod2 should pull up for i2c control!
     sound.init_pcm5122(CONFIG_I2C_SDA_GPIO, CONFIG_I2C_SCL_GPIO);
     sound.set_volume(0.1f);
     sound.set_pcm5122_dsp_program(Sound::Pcm5122DspProgram::FirInterpolation);
-
-    playlist.rescan();
-    playlist.play_next();
 
     auto render_message = [](const std::string& msg) {
         fill_screen(kBackground);
@@ -176,6 +187,9 @@ extern "C" void app_main(void)
     // Host AP mode. This will be accessible from the AP and serve index.html at /
     //http_server.start(HttpServer::Mode::AP, callbacks, "ESP32-AP", "");
     http_server.start(HttpServer::Mode::Client, callbacks, "4Open", "");
+
+    playlist.rescan();
+    playlist.play_next();
 
     wait_forever(playlist);
 }

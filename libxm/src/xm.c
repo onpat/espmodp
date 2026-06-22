@@ -156,6 +156,30 @@ uint16_t xm_get_number_of_samples(const xm_context_t* ctx) {
 	return ctx->module.num_samples;
 }
 
+#if defined(XM_SAMPLE_TYPE_DD4A) || defined(XM_SAMPLE_TYPE_DD8A)
+#include <stdio.h>
+void xm_dump_sample_info(const xm_context_t* ctx) {
+	uint16_t n = ctx->module.num_samples;
+	fprintf(stderr, "SAMPLE-DUMP: total=%u samples_data_length=%lu\n",
+	       (unsigned)n, (unsigned long)ctx->module.samples_data_length);
+	for(uint16_t i = 0; i < n; ++i) {
+		xm_sample_t* s = ctx->samples + i;
+		uint32_t idx = s->index;
+		const char* valid = "?";
+		if(idx >= ctx->module.samples_data_length) {
+			valid = "OOB";
+		} else {
+			void* p = ctx->samples_data[idx].p;
+			valid = p ? "OK" : "NULL";
+		}
+		fprintf(stderr, "  SMP[%u] length=%lu index=%lu data=%s\n",
+		       (unsigned)i, (unsigned long)s->length,
+		       (unsigned long)idx, valid);
+	}
+	fflush(stderr);
+}
+#endif
+
 xm_sample_point_t* xm_get_sample_waveform(xm_context_t* ctx,
                                           uint16_t sample, uint32_t* length) {
 	assert(sample <= ctx->module.num_samples);

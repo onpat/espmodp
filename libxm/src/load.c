@@ -70,6 +70,63 @@ static inline void stream_read_memcpy(xm_stream_t* stream, void* dest, uint32_t 
 #define READ_MEMCPY(dest, offset, length) \
 	READ_MEMCPY_BOUND(dest, offset, length, moddata_length)
 
+#if defined(XM_SAMPLE_TYPE_DD4A) || defined(XM_SAMPLE_TYPE_DD8A)
+#include <libsac.h>
+
+typedef struct {
+	xm_stream_t* moddata;
+	uint32_t moddata_length;
+	uint32_t offset;
+	uint8_t sample_format; /* 0=8bit_abs, 1=16bit_abs, 2=8bit_delta, 3=16bit_delta */
+	bool signed_smp_data;
+	int8_t current_v8;
+	int16_t current_v16;
+} sac_cb_data_t;
+
+	static int sac_read_cb(void *user_data, int channel, int start, int count, int16_t *out_block) {
+		sac_cb_data_t *d = (sac_cb_data_t*)user_data;
+		xm_stream_t* moddata = d->moddata;
+		uint32_t moddata_length = d->moddata_length;
+		
+		uint8_t bytes_per_sample = (d->sample_format == 1 || d->sample_format == 3) ? 2 : 1;
+		uint32_t total_bytes = count * bytes_per_sample;
+		
+		uint8_t buf[256];
+		uint8_t* p = buf;
+		if (total_bytes > sizeof(buf)) {
+			p = (uint8_t*)__builtin_alloca(total_bytes);
+		}
+		
+		READ_MEMCPY(p, d->offset, total_bytes);
+		
+		uint32_t read_offset = 0;
+		for (int i = 0; i < count; ++i) {
+			if (d->sample_format == 3) {
+				int16_t sample = (int16_t)(p[read_offset] | (p[read_offset + 1] << 8));
+				read_offset += 2;
+				d->current_v16 += sample;
+				out_block[i] = d->current_v16;
+			} else if (d->sample_format == 2) {
+				int8_t sample = (int8_t)p[read_offset];
+				read_offset += 1;
+				d->current_v8 += sample;
+				out_block[i] = (int16_t)d->current_v8 * 256;
+			} else if (d->sample_format == 1) {
+				int16_t sample = (int16_t)(p[read_offset] | (p[read_offset + 1] << 8));
+				read_offset += 2;
+				out_block[i] = (int16_t)(sample + (d->signed_smp_data ? 0 : INT16_MIN));
+			} else if (d->sample_format == 0) {
+				int8_t sample = (int8_t)p[read_offset];
+				read_offset += 1;
+				out_block[i] = (int16_t)((int8_t)sample + (d->signed_smp_data ? 0 : INT8_MIN)) * 256;
+			}
+		}
+		
+		d->offset += total_bytes;
+		return count;
+	}
+#endif
+
 #define TRIM_SAMPLE_LENGTH(length, loop_start, loop_length, flags) \
 	((flags) & (SAMPLE_FLAG_PING_PONG | SAMPLE_FLAG_FORWARD) ? \
 	 ((loop_start > length ? length :				\
@@ -77,18 +134,18 @@ static inline void stream_read_memcpy(xm_stream_t* stream, void* dest, uint32_t 
 	   )) : length)
 
 #define SAMPLE_POINT_FROM_S8(v) \
-	_Generic((xm_sample_point_t){}, int8_t: (v), int16_t: ((v) * 256), \
-	         float: (float)(v) / 128.f)
+	_Generic((xm_sample_point_t){0}, int8_t: (v), int16_t: ((v) * 256), \
+	         float: (float)(v) / 128.f, dd4a_t: (dd4a_t){0}, dd8a_t: (dd8a_t){0})
 
 #define SAMPLE_POINT_FROM_S16(v) \
-	_Generic((xm_sample_point_t){}, int8_t: xm_dither_16b_8b(v), \
-		int16_t: (v), float: (float)(v) / 32768.f)
+	_Generic((xm_sample_point_t){0}, int8_t: xm_dither_16b_8b(v), \
+		int16_t: (v), float: (float)(v) / 32768.f, dd4a_t: (dd4a_t){0}, dd8a_t: (dd8a_t){0})
 
 #define SAMPLE_POINT_FROM_F32(v) \
-	_Generic((xm_sample_point_t){}, \
+	_Generic((xm_sample_point_t){0}, \
 	         int8_t: xm_dither_16b_8b((int16_t)((v) * 32768.f)), \
 	         int16_t: ((int16_t)((v) * 32768.f)), \
-	         float: (v))
+	         float: (v), dd4a_t: (dd4a_t){0}, dd8a_t: (dd8a_t){0})
 
 /* Type punning helpers */
 static uint32_t F32_TO_U32(_Float32 x) {
@@ -530,11 +587,13 @@ void xm_dump_context(xm_context_t* __restrict ctx, char* __restrict out) {
 
 	#if XM_LIBXM_DELTA_SAMPLES
 	/* Do nothing for floats, in practice this doesn't help */
-	if(_Generic((xm_sample_point_t){}, float: false, default: true)) {
+	#if !defined(XM_SAMPLE_TYPE_DD4A) && !defined(XM_SAMPLE_TYPE_DD8A)
+	if(_Generic((xm_sample_point_t){0}, float: false, default: true)) {
 		for(uint32_t i = ctx->module.samples_data_length-1; i > 0; --i) {
 			ctx->samples_data[i] -= ctx->samples_data[i-1];
 		}
 	}
+	#endif
 	#endif
 
 	CALC_OFFSET(ctx->patterns, ctx);
@@ -581,11 +640,13 @@ xm_context_t* xm_restore_context(char* data) {
 	#endif
 
 	#if XM_LIBXM_DELTA_SAMPLES
-	if(_Generic((xm_sample_point_t){}, float: false, default: true)) {
+	#if !defined(XM_SAMPLE_TYPE_DD4A) && !defined(XM_SAMPLE_TYPE_DD8A)
+	if(_Generic((xm_sample_point_t){0}, float: false, default: true)) {
 		for(uint32_t i = 1; i < ctx->module.samples_data_length; ++i) {
 			ctx->samples_data[i] += ctx->samples_data[i-1];
 		}
 	}
+	#endif
 	#endif
 
 	return ctx;
@@ -994,7 +1055,7 @@ void xm_save_context(const xm_context_t* __restrict ctx, char* __restrict out) {
 	}
 
 	for(uint32_t i = 0; i < ctx->module.samples_data_length; ++i) {
-		WRITE_U32(out, F32_TO_U32(SAMPLE_DATA(ctx, i)));
+		WRITE_U32(out, F32_TO_U32(SAMPLE_DATA(ctx, NULL, i)));
 		out += 4;
 	}
 
@@ -1090,7 +1151,17 @@ static bool xm_prescan_xm0104(xm_stream_t* __restrict moddata,
 
 	/* Read instrument headers */
 	for(uint16_t i = 0; i < out->num_instruments; ++i) {
+		uint32_t ins_header_size = READ_U32(offset);
+		uint32_t orig_moddata_length = moddata_length;
+
+		/* Bound reads to the declared instrument header size,
+		 * matching the load path behaviour (important for
+		 * BoobieSqueezer-compressed modules with truncated
+		 * instrument headers). */
+		moddata_length = offset + ins_header_size;
 		uint16_t num_samples = READ_U16(offset + 27);
+		moddata_length = orig_moddata_length;
+
 		uint32_t inst_samples_bytes = 0;
 		if(ckd_add(&out->num_samples, out->num_samples,
 		           HAS_FEATURE(FEATURE_MULTISAMPLE_INSTRUMENTS)
@@ -1110,7 +1181,7 @@ static bool xm_prescan_xm0104(xm_stream_t* __restrict moddata,
 		}
 
 		/* Instrument header size */
-		offset += READ_U32(offset);
+		offset += ins_header_size;
 
 		/* Read sample headers */
 		for(uint16_t j = 0; j < num_samples; ++j) {
@@ -1138,12 +1209,16 @@ static bool xm_prescan_xm0104(xm_stream_t* __restrict moddata,
 				return false;
 			}
 
-			if(HAS_FEATURE(FEATURE_MULTISAMPLE_INSTRUMENTS)
-			   || j == 0) {
-				out->samples_data_length += sample_length;
-			}
+		if(HAS_FEATURE(FEATURE_MULTISAMPLE_INSTRUMENTS)
+		   || j == 0) {
+#if defined(XM_SAMPLE_TYPE_DD4A) || defined(XM_SAMPLE_TYPE_DD8A)
+			out->samples_data_length += 1;
+#else
+			out->samples_data_length += sample_length;
+#endif
+		}
 
-			inst_samples_bytes += sample_bytes;
+		inst_samples_bytes += sample_bytes;
 			offset += SAMPLE_HEADER_SIZE;
 		}
 
@@ -1438,8 +1513,11 @@ static uint32_t xm_load_xm0104_instrument(xm_context_t* ctx,
 		NOTICE("ignoring non-zero instrument type %d", type);
 	}
 
-	uint16_t num_samples = READ_U8(offset + 27);
+	uint16_t num_samples = READ_U16(offset + 27);
 	if(num_samples == 0) {
+		fprintf(stderr, "INST[??] ns=0 offset=0x%lx total=%u ZERO\n",
+		       (unsigned long)offset, (unsigned)ctx->module.num_samples);
+		fflush(stderr);
 		#if HAS_FEATURE(FEATURE_MULTISAMPLE_INSTRUMENTS)
 		__builtin_memset(instr->sample_of_notes, 0xFF,
 		                 sizeof(instr->sample_of_notes));
@@ -1448,6 +1526,17 @@ static uint32_t xm_load_xm0104_instrument(xm_context_t* ctx,
 		#endif
 		return offset + ins_header_size;
 	}
+
+	#if HAS_FEATURE(FEATURE_MULTISAMPLE_INSTRUMENTS)
+	for(uint8_t j = 0; j < MAX_NOTE; ++j) {
+		instr->sample_of_notes[j] = READ_U8(offset + 33 + j);
+		if(instr->sample_of_notes[j] >= num_samples) {
+			instr->sample_of_notes[j] = UINT16_MAX;
+		} else {
+			instr->sample_of_notes[j] += ctx->module.num_samples;
+		}
+	}
+	#endif
 
 	/* Read extra header properties */
 
@@ -1524,6 +1613,10 @@ static uint32_t xm_load_xm0104_instrument(xm_context_t* ctx,
 	#else
 	ctx->module.num_samples += 1;
 	#endif
+	fprintf(stderr, "INST[??] ns=%u offset=0x%lx total=%u\n",
+	       (unsigned)num_samples, (unsigned long)offset,
+	       (unsigned)ctx->module.num_samples);
+	fflush(stderr);
 
 	for(uint16_t i = 0; i < num_samples; ++i) {
 		if(HAS_FEATURE(FEATURE_MULTISAMPLE_INSTRUMENTS) || i == 0) {
@@ -1548,6 +1641,42 @@ static uint32_t xm_load_xm0104_instrument(xm_context_t* ctx,
 		/* As currently loaded, s->index is the real sample length in
 		   the xm file, s->length is after trimming to loop_end (and the
 		   actual sample length as stored in the context) */
+		
+#if defined(XM_SAMPLE_TYPE_DD4A) || defined(XM_SAMPLE_TYPE_DD8A)
+		bool is_16bit = s->length & (1u << 31);
+		s->length &= ~(1u << 31);
+		uint32_t file_byte_len = is_16bit ? (s->index * 2) : s->index;
+		sac_cb_data_t cb_data;
+		cb_data.moddata = moddata;
+		cb_data.moddata_length = moddata_length;
+		cb_data.offset = offset;
+		cb_data.sample_format = is_16bit ? 3 : 2;
+		cb_data.signed_smp_data = false;
+		cb_data.current_v8 = 0;
+		cb_data.current_v16 = 0;
+		
+		int enc = 1; // SAC_FORMAT_DD4A
+#if defined(XM_SAMPLE_TYPE_DD8A)
+		enc = 2; // SAC_FORMAT_DD8A
+#endif
+		sac_packed_data_t* packed = sac_encode_cb(s->length, 1, 44100, (sac_encoding_t)enc, sac_read_cb, &cb_data);
+		if (!packed) {
+			NOTICE("sac_encode_cb failed for sample %u "
+			       "(length=%u, is_16bit=%d) — "
+			       "sample will be silent",
+			       samples_index + i,
+			       (unsigned)s->length, (int)is_16bit);
+		}
+		
+		/* Advance past the entire sample data as stored in the file
+		 * (original byte count), not just the trimmed portion that
+		 * sac_encode_cb consumed. */
+		offset += file_byte_len;
+		ctx->samples_data[ctx->module.samples_data_length].p = packed;
+		
+		s->index = ctx->module.samples_data_length;
+		ctx->module.samples_data_length += 1;
+#else
 		xm_sample_point_t* sample_data = ctx->samples_data
 			+ ctx->module.samples_data_length;
 		if(s->length & (1u << 31)) {
@@ -1569,6 +1698,7 @@ static uint32_t xm_load_xm0104_instrument(xm_context_t* ctx,
 		}
 		s->index = ctx->module.samples_data_length;
 		ctx->module.samples_data_length += s->length;
+#endif
 
 		#if !HAS_FEATURE(FEATURE_MULTISAMPLE_INSTRUMENTS)
 		offset += extra_samples_size;
@@ -1582,7 +1712,6 @@ static uint32_t xm_load_xm0104_instrument(xm_context_t* ctx,
 static void xm_load_xm0104_envelope_points(xm_envelope_t* env,
                                            xm_stream_t* moddata,
                                            uint32_t moddata_offset) {
-	uint32_t moddata_length = MAX_ENVELOPE_POINTS * 4;
 	uint16_t env_val;
 	for(uint8_t i = 0; i < MAX_ENVELOPE_POINTS; ++i) {
 		env->points[i].frame = stream_read_u8(moddata, moddata_offset + 4u * i) | (stream_read_u8(moddata, moddata_offset + 4u * i + 1u) << 8);
@@ -1741,10 +1870,10 @@ static uint32_t xm_load_xm0104_sample_header(xm_sample_t* sample, bool* is_16bit
 }
 
 static void xm_load_xm0104_8b_sample_data(uint32_t length,
-                                          xm_sample_point_t* out,
-                                          xm_stream_t* moddata,
-                                          uint32_t moddata_length,
-                                          uint32_t offset) {
+                                   xm_sample_point_t* out,
+                                   xm_stream_t* moddata,
+                                   uint32_t moddata_length,
+                                   uint32_t offset) {
 	int8_t v = 0;
 	uint8_t s;
 	for(uint32_t k = 0; k < length; ++k) {
@@ -1755,10 +1884,10 @@ static void xm_load_xm0104_8b_sample_data(uint32_t length,
 }
 
 static void xm_load_xm0104_16b_sample_data(uint32_t length,
-                                           xm_sample_point_t* out,
-                                           xm_stream_t* moddata,
-                                           uint32_t moddata_length,
-                                           uint32_t offset) {
+                                    xm_sample_point_t* out,
+                                    xm_stream_t* moddata,
+                                    uint32_t moddata_length,
+                                    uint32_t offset) {
 	int16_t v = 0;
 	for(uint32_t k = 0; k < length; ++k) {
 		v += (int16_t)READ_U16(offset + (k << 1));
@@ -1847,7 +1976,11 @@ static bool xm_prescan_mod(xm_stream_t* __restrict moddata,
 			                            loop_length,
 			                            SAMPLE_FLAG_FORWARD);
 		}
+#if defined(XM_SAMPLE_TYPE_DD4A) || defined(XM_SAMPLE_TYPE_DD8A)
+		p->samples_data_length += 1;
+#else
 		p->samples_data_length += length;
+#endif
 	}
 
 	p->pot_length = READ_U8(950);
@@ -2093,6 +2226,31 @@ static void xm_load_mod(xm_context_t* __restrict ctx,
 
 	/* Read sample data */
 	for(uint8_t i = 0; i < ctx->module.num_samples; ++i) {
+#if defined(XM_SAMPLE_TYPE_DD4A) || defined(XM_SAMPLE_TYPE_DD8A)
+		sac_cb_data_t cb_data;
+		cb_data.moddata = moddata;
+		cb_data.moddata_length = moddata_length;
+		cb_data.offset = offset;
+		cb_data.sample_format = 0;
+		cb_data.signed_smp_data = false;
+		cb_data.current_v8 = 0;
+		cb_data.current_v16 = 0;
+
+		int enc = 1; // SAC_FORMAT_DD4A
+#if defined(XM_SAMPLE_TYPE_DD8A)
+		enc = 2; // SAC_FORMAT_DD8A
+#endif
+		sac_packed_data_t* packed = sac_encode_cb(ctx->samples[i].length, 1, 44100, (sac_encoding_t)enc, sac_read_cb, &cb_data);
+
+		/* Advance past the entire sample data as stored in the file
+		 * (original byte count), not just the trimmed portion that
+		 * sac_encode_cb consumed. */
+		offset += ctx->samples[i].index;
+		ctx->samples_data[ctx->module.samples_data_length].p = packed;
+
+		ctx->samples[i].index = ctx->module.samples_data_length;
+		ctx->module.samples_data_length += 1;
+#else
 		xm_sample_point_t* out = ctx->samples_data
 			+ ctx->module.samples_data_length;
 		for(uint32_t k = 0; k < ctx->samples[i].length; ++k) {
@@ -2101,6 +2259,7 @@ static void xm_load_mod(xm_context_t* __restrict ctx,
 		offset += ctx->samples[i].index;
 		ctx->samples[i].index = ctx->module.samples_data_length;
 		ctx->module.samples_data_length += ctx->samples[i].length;
+#endif
 	}
 }
 
@@ -2354,7 +2513,11 @@ static bool xm_prescan_s3m(xm_stream_t* __restrict moddata,
 			       i, length, MAX_SAMPLE_LENGTH);
 			return false;
 		}
+#if defined(XM_SAMPLE_TYPE_DD4A) || defined(XM_SAMPLE_TYPE_DD8A)
+		out->samples_data_length += 1;
+#else
 		out->samples_data_length += length;
+#endif
 	}
 
 	return true;
@@ -2635,14 +2798,36 @@ void xm_load_s3m_instrument(xm_context_t* __restrict ctx,
 
 	/* Now read sample data */
 	smp->index = ctx->module.samples_data_length;
-	xm_sample_point_t* out = ctx->samples_data
-		+ ctx->module.samples_data_length;
 	offset = 16 * ((((uint32_t)READ_U8(offset + 13)) << 16)
 	               + READ_U16(offset + 14));
 	if(is_16bit) {
 		smp->length /= 2;
 		smp->loop_length /= 2;
 	}
+
+#if defined(XM_SAMPLE_TYPE_DD4A) || defined(XM_SAMPLE_TYPE_DD8A)
+	sac_cb_data_t cb_data;
+	cb_data.moddata = moddata;
+	cb_data.moddata_length = moddata_length;
+	cb_data.offset = offset;
+	cb_data.sample_format = is_16bit ? 1 : 0;
+	cb_data.signed_smp_data = signed_smp_data;
+	cb_data.current_v8 = 0;
+	cb_data.current_v16 = 0;
+
+	int enc = 1; // SAC_FORMAT_DD4A
+#if defined(XM_SAMPLE_TYPE_DD8A)
+	enc = 2; // SAC_FORMAT_DD8A
+#endif
+	sac_packed_data_t* packed = sac_encode_cb(smp->length, 1, 44100, (sac_encoding_t)enc, sac_read_cb, &cb_data);
+
+	offset = cb_data.offset;
+	ctx->samples_data[ctx->module.samples_data_length].p = packed;
+
+	ctx->module.samples_data_length += 1;
+#else
+	xm_sample_point_t* out = ctx->samples_data
+		+ ctx->module.samples_data_length;
 	for(uint32_t k = 0; k < smp->length; ++k) {
 		*out++ = is_16bit
 			? SAMPLE_POINT_FROM_S16((int16_t)
@@ -2655,6 +2840,7 @@ void xm_load_s3m_instrument(xm_context_t* __restrict ctx,
 			                           ? 0 : INT8_MIN)));
 	}
 	ctx->module.samples_data_length += smp->length;
+#endif
 }
 
 static void xm_load_s3m_pattern(xm_context_t* __restrict ctx,

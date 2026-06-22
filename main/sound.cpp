@@ -5,7 +5,10 @@
 #include "freertos/task.h"
 #include "esp_timer.h"
 #include <cmath>
+#include <cstdio>
 #include "driver/i2c_master.h"
+
+extern "C" void xm_dump_sample_info(const xm_context_t*);
 
 static const char* TAG = "Sound";
 
@@ -88,6 +91,15 @@ bool Sound::load(const uint8_t* data, size_t size) {
         return false;
     }
 
+    fprintf(stderr, "POST-LOAD: num_samples=%u "
+           "num_instruments=%u channels=%u\n",
+           xm_get_number_of_samples(xm_ctx),
+           xm_get_number_of_instruments(xm_ctx),
+           xm_get_number_of_channels(xm_ctx));
+    fflush(stderr);
+
+    xm_dump_sample_info(xm_ctx);
+
     xm_set_sample_rate(xm_ctx, 48000);
 
     ESP_LOGI(TAG, "Successfully loaded module from memory");
@@ -97,7 +109,20 @@ bool Sound::load(const uint8_t* data, size_t size) {
 static size_t file_stream_read(xm_stream_t* stream, void* dest, size_t length, size_t offset) {
     FILE* f = static_cast<FILE*>(stream->user_data);
     fseek(f, offset, SEEK_SET);
-    return fread(dest, 1, length, f);
+
+    /* Stage reads through an SRAM bounce buffer so fread never writes
+     * directly to a PSRAM destination. */
+    size_t total = 0;
+    uint8_t buf[128];
+    while (total < length) {
+        size_t chunk = length - total;
+        if (chunk > sizeof(buf)) chunk = sizeof(buf);
+        size_t n = fread(buf, 1, chunk, f);
+        if (n == 0) break;
+        memcpy((uint8_t*)dest + total, buf, n);
+        total += n;
+    }
+    return total;
 }
 
 bool Sound::load_from_file(const char* filepath) {
@@ -127,7 +152,7 @@ bool Sound::load_from_file(const char* filepath) {
     uint32_t ctx_size = xm_size_for_context(prescan);
     ESP_LOGI(TAG, "Context size required: %lu bytes", (unsigned long)ctx_size);
 
-    xm_ctx = nullptr; // Ensure we don't access it while reallocating
+    xm_ctx = nullptr;
     if (xm_pool) {
         heap_caps_free(xm_pool);
         xm_pool = nullptr;
@@ -150,9 +175,19 @@ bool Sound::load_from_file(const char* filepath) {
         return false;
     }
 
+    ESP_LOGI(TAG, "Successfully loaded module from file");
+
     xm_set_sample_rate(xm_ctx, 48000);
 
-    ESP_LOGI(TAG, "Successfully loaded module from file");
+    fprintf(stderr, "POST-LOAD: num_samples=%u "
+           "num_instruments=%u channels=%u\n",
+           xm_get_number_of_samples(xm_ctx),
+           xm_get_number_of_instruments(xm_ctx),
+           xm_get_number_of_channels(xm_ctx));
+    fflush(stderr);
+
+    xm_dump_sample_info(xm_ctx);
+
     return true;
 }
 
@@ -321,21 +356,15 @@ void Sound::play_task(void* arg) {
 
     int16_t* buffer = static_cast<int16_t*>(heap_caps_malloc(sound->play_chunk_samples * 2 * sizeof(int16_t), MALLOC_CAP_DEFAULT));
     
-    // push empty buffer multiple times to create a silent zone at the start of playback.
-    // This fully flushes out any stale audio from the I2S DMA buffers from the previous 
-    // playback while the DAC is still muted.
     if (buffer && sound->play_callback) {
         memset(buffer, 0, sound->play_chunk_samples * 2 * sizeof(int16_t));
-        // Flush DMA with silence while muted
         for (int i = 0; i < 8; i++) {
             sound->play_callback(buffer, sound->play_chunk_samples);
         }
         
-        // Unmute the DAC now that clean silence is flowing
         if (sound->pcm5122_initialized) {
             sound->set_pcm5122_mute(false);
         }
-        
     }
     
     while (sound->playing) {

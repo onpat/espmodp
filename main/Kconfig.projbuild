@@ -64,6 +64,28 @@ menu "espmodp configuration"
         range -1 48
         default 19
 
+    choice XM_SAMPLE_TYPE
+        prompt "Sample Format"
+        default XM_SAMPLE_INT16
+        help
+            Select the sample format for libxm.
+
+        config XM_SAMPLE_FLOAT
+            bool "Float"
+
+        config XM_SAMPLE_INT16
+            bool "Int16"
+
+        config XM_SAMPLE_INT8
+            bool "Int8"
+
+        config XM_SAMPLE_DD4A
+            bool "DD4A"
+
+        config XM_SAMPLE_DD8A
+            bool "DD8A"
+    endchoice
+
     choice STORAGE_TYPE
         prompt "Storage Type"
         default STORAGE_LITTLEFS

@@ -1,8 +1,20 @@
 set(LIBXM_SRC_DIR "${CMAKE_CURRENT_LIST_DIR}/src")
 set(LIBXM_COMPAT_DIR "${CMAKE_CURRENT_LIST_DIR}/compat")
 
-set(XM_SAMPLE_TYPE "int16_t" CACHE STRING
-    "libxm internal sample type: int8_t, int16_t, or float" FORCE)
+if(CONFIG_XM_SAMPLE_FLOAT)
+    set(XM_SAMPLE_TYPE "float")
+elseif(CONFIG_XM_SAMPLE_INT16)
+    set(XM_SAMPLE_TYPE "int16_t")
+elseif(CONFIG_XM_SAMPLE_INT8)
+    set(XM_SAMPLE_TYPE "int8_t")
+elseif(CONFIG_XM_SAMPLE_DD4A)
+    set(XM_SAMPLE_TYPE "dd4a_t")
+elseif(CONFIG_XM_SAMPLE_DD8A)
+    set(XM_SAMPLE_TYPE "dd8a_t")
+else()
+    set(XM_SAMPLE_TYPE "int16_t")
+endif()
+
 set(XM_SAMPLE_RATE "0" CACHE STRING
     "libxm output sample rate, or 0 to configure at runtime")
 set(XM_MICROSTEP_BITS "12" CACHE STRING
@@ -40,6 +52,8 @@ idf_component_register(
     PRIV_INCLUDE_DIRS
         "${LIBXM_COMPAT_DIR}"
         "${LIBXM_SRC_DIR}"
+    PRIV_REQUIRES
+        libsac
 )
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -O3 -ffast-math -Wno-error=maybe-uninitialized)
@@ -60,4 +74,9 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     "XM_DISABLED_VOLUME_EFFECTS=${XM_DISABLED_VOLUME_EFFECTS}ULL"
     "XM_DISABLED_FEATURES=${XM_DISABLED_FEATURES}ULL"
 )
+if(XM_SAMPLE_TYPE STREQUAL "dd4a_t")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE XM_SAMPLE_TYPE_DD4A=1)
+elseif(XM_SAMPLE_TYPE STREQUAL "dd8a_t")
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE XM_SAMPLE_TYPE_DD8A=1)
+endif()
 target_link_libraries(${COMPONENT_LIB} PRIVATE m)

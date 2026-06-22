@@ -12,6 +12,13 @@ vibe-coded module player application for ESP32
   - loop
   - upload files to internal flash
 
+- DD4A and DD8A support for libxm context
+  - DDPCM compression from libsac
+  - DD4A uses 4-bit and DD8A uses 8-bit.
+  - select with menuconfig (`idf.py menuconfig`)
+  - compressing samples on loading module to PSRAM
+  - decompress sample on SRAM at calculating audio frame
+
 ## supported hardware
 
 ESP32
@@ -20,6 +27,7 @@ Optionally configure through compile switch:
 - 4MB PSRAM
   - required for playback 30KB~4MB modules.
   - w/o PSRAM, module will be loaded to SRAM.
+  - 80MHz configuration recommended.
 - external I2S (preferably PCM5122)
   - has PCM5122 I2C mute/volume control.
 - 1'9 ST7789 LCD for debug
@@ -32,6 +40,10 @@ this project includes modified [libxm](https://github.com/Artefact2/libxm) for E
  - add IRAM_ATTR attribution to hot-path function
  - replace exp2 with bit-shift implement
  - panning 80% on playing mod files
+ - DD4A and DD8A sample compression
+
+- the ESP32 SRAM has only ~100KB free so loading module into SRAM is impossible.
+- in this project loading module into PSRAM (with compressing samples) and read to SRAM/decompress at playing on-the-fly.
 
 ## License
 
