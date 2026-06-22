@@ -4,15 +4,23 @@
 #include "esp_log.h"
 #include <algorithm>
 
+#ifdef CONFIG_STORAGE_SDCARD
+#define MOUNT_POINT "/sdcard"
+#define MOUNT_POINT_PREFIX "/sdcard/"
+#else
+#define MOUNT_POINT "/lfs"
+#define MOUNT_POINT_PREFIX "/lfs/"
+#endif
+
 static const char* TAG = "Playlist";
 
 Playlist::Playlist(Sound& sound) : sound_(sound), current_index_(-1), is_playing_(false) {
 }
 
 void Playlist::rescan() {
-    DIR* dir = opendir("/lfs");
+    DIR* dir = opendir(MOUNT_POINT);
     if (!dir) {
-        ESP_LOGE(TAG, "Failed to open directory /lfs");
+        ESP_LOGE(TAG, "Failed to open directory %s", MOUNT_POINT);
         return;
     }
 
@@ -96,7 +104,7 @@ void Playlist::play(size_t index) {
 
     is_playing_ = false; // Prevent update() from accessing sound_ while loading
     current_index_ = index;
-    std::string path = "/lfs/" + items_[current_index_].filename;
+    std::string path = std::string(MOUNT_POINT_PREFIX) + items_[current_index_].filename;
     
     ESP_LOGI(TAG, "Playlist::play(%zu) - File: %s", index, path.c_str());
 

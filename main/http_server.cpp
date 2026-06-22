@@ -16,6 +16,14 @@
 #include "esp_netif.h"
 #include "esp_mac.h"
 
+#ifdef CONFIG_STORAGE_SDCARD
+#define MOUNT_POINT "/sdcard"
+#define MOUNT_POINT_PREFIX "/sdcard/"
+#else
+#define MOUNT_POINT "/lfs"
+#define MOUNT_POINT_PREFIX "/lfs/"
+#endif
+
 static const char* TAG = "HttpServer";
 
 static const char* index_html = R"rawliteral(
@@ -248,6 +256,9 @@ bool HttpServer::init_wifi_sta(const std::string& ssid, const std::string& passw
     esp_err_t scan_ret = esp_wifi_scan_start(&scan_config, true);
     
     bool target_found = false;
+    uint8_t target_bssid[6] = {0};
+    uint8_t target_channel = 0;
+    
     if (scan_ret == ESP_OK) {
         uint16_t ap_count = 0;
         esp_wifi_scan_get_ap_num(&ap_count);
@@ -257,6 +268,8 @@ bool HttpServer::init_wifi_sta(const std::string& ssid, const std::string& passw
             for (int i = 0; i < ap_count; i++) {
                 if (strcmp((char *)ap_info[i].ssid, ssid.c_str()) == 0) {
                     target_found = true;
+                    memcpy(target_bssid, ap_info[i].bssid, 6);
+                    target_channel = ap_info[i].primary;
                     break;
                 }
             }
@@ -265,14 +278,24 @@ bool HttpServer::init_wifi_sta(const std::string& ssid, const std::string& passw
     }
 
     if (target_found) {
-        ESP_LOGI(TAG, "Target router found! Connecting...");
+        ESP_LOGI(TAG, "Target router found on channel %d! Connecting...", target_channel);
         
         wifi_config_t wifi_config = {};
         strncpy((char*)wifi_config.sta.ssid, ssid.c_str(), sizeof(wifi_config.sta.ssid) - 1);
         strncpy((char*)wifi_config.sta.password, password.c_str(), sizeof(wifi_config.sta.password) - 1);
-        wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+        wifi_config.sta.threshold.authmode = password.empty() ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA_PSK;
+        
+        // Force connection to the exact AP we found
+        wifi_config.sta.bssid_set = 1;
+        memcpy(wifi_config.sta.bssid, target_bssid, 6);
+        wifi_config.sta.channel = target_channel;
+        
+        // Disable PMF to maximize compatibility with older/buggy routers
+        wifi_config.sta.pmf_cfg.capable = false;
+        wifi_config.sta.pmf_cfg.required = false;
 
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
+        vTaskDelay(pdMS_TO_TICKS(100)); // Small delay after scan
         ESP_ERROR_CHECK(esp_wifi_connect());
     } else {
         ESP_LOGW(TAG, "Target router NOT found. Switching to AP mode...");
@@ -354,7 +377,7 @@ int HttpServer::api_post_handler(void* req_v) {
         } else if (strcmp(action->valuestring, "delete_file") == 0) {
             cJSON *filename = cJSON_GetObjectItem(json, "filename");
             if (cJSON_IsString(filename) && (filename->valuestring != NULL)) {
-                std::string path = std::string("/lfs/") + filename->valuestring;
+                std::string path = std::string(MOUNT_POINT_PREFIX) + filename->valuestring;
                 unlink(path.c_str());
                 if (server->callbacks_.on_files_changed) {
                     server->callbacks_.on_files_changed();
@@ -485,7 +508,7 @@ void HttpServer::stop() {
 
 int HttpServer::api_files_get_handler(void* req_v) {
     httpd_req_t *req = (httpd_req_t *)req_v;
-    DIR* dir = opendir("/lfs");
+    DIR* dir = opendir(MOUNT_POINT);
     if (!dir) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to open directory");
         return ESP_FAIL;
@@ -495,7 +518,7 @@ int HttpServer::api_files_get_handler(void* req_v) {
     struct dirent* entry;
     while ((entry = readdir(dir)) != NULL) {
         struct stat st;
-        std::string path = std::string("/lfs/") + entry->d_name;
+        std::string path = std::string(MOUNT_POINT_PREFIX) + entry->d_name;
         if (stat(path.c_str(), &st) == 0) {
             cJSON* item = cJSON_CreateObject();
             cJSON_AddStringToObject(item, "name", entry->d_name);
@@ -532,7 +555,7 @@ int HttpServer::api_upload_post_handler(void* req_v) {
         return ESP_FAIL;
     }
     
-    std::string path = std::string("/lfs/") + filename;
+    std::string path = std::string(MOUNT_POINT_PREFIX) + filename;
     FILE* f = fopen(path.c_str(), "w");
     if (!f) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to open file for writing");
@@ -580,7 +603,7 @@ int HttpServer::api_download_get_handler(void* req_v) {
         return ESP_FAIL;
     }
 
-    std::string path = std::string("/lfs/") + filename;
+    std::string path = std::string(MOUNT_POINT_PREFIX) + filename;
     FILE* f = fopen(path.c_str(), "r");
     if (!f) {
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File not found");

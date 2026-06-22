@@ -13,15 +13,19 @@
 #include "esp_lcd_panel_st7789.h"
 #include "esp_log.h"
 
+#include "sdkconfig.h"
+
+#ifdef CONFIG_ENABLE_LCD
+
 static const char *TAG = "lcd";
 
 namespace {
-constexpr gpio_num_t kResetGpio = GPIO_NUM_4;
-constexpr gpio_num_t kDcGpio = GPIO_NUM_2;
-constexpr gpio_num_t kCsGpio = GPIO_NUM_15;
-constexpr gpio_num_t kBacklightGpio = GPIO_NUM_32;
-constexpr gpio_num_t kSclkGpio = GPIO_NUM_18;
-constexpr gpio_num_t kMosiGpio = GPIO_NUM_23;
+constexpr gpio_num_t kResetGpio = static_cast<gpio_num_t>(CONFIG_LCD_RESET_GPIO);
+constexpr gpio_num_t kDcGpio = static_cast<gpio_num_t>(CONFIG_LCD_DC_GPIO);
+constexpr gpio_num_t kCsGpio = static_cast<gpio_num_t>(CONFIG_LCD_CS_GPIO);
+constexpr gpio_num_t kBacklightGpio = static_cast<gpio_num_t>(CONFIG_LCD_BACKLIGHT_GPIO);
+constexpr gpio_num_t kSclkGpio = static_cast<gpio_num_t>(CONFIG_LCD_SCLK_GPIO);
+constexpr gpio_num_t kMosiGpio = static_cast<gpio_num_t>(CONFIG_LCD_MOSI_GPIO);
 constexpr spi_host_device_t kSpiHost = SPI2_HOST;
 constexpr uint16_t kPanelWidth = 170;
 constexpr uint16_t kPanelHeight = 320;
@@ -193,3 +197,5 @@ void draw_rectangle(int x, int y, int width, int height, uint16_t color)
 
     free(buffer);
 }
+
+#endif // CONFIG_ENABLE_LCD

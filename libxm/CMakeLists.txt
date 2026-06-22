@@ -2,7 +2,7 @@ set(LIBXM_SRC_DIR "${CMAKE_CURRENT_LIST_DIR}/src")
 set(LIBXM_COMPAT_DIR "${CMAKE_CURRENT_LIST_DIR}/compat")
 
 set(XM_SAMPLE_TYPE "int16_t" CACHE STRING
-    "libxm internal sample type: int8_t, int16_t, or float")
+    "libxm internal sample type: int8_t, int16_t, or float" FORCE)
 set(XM_SAMPLE_RATE "0" CACHE STRING
     "libxm output sample rate, or 0 to configure at runtime")
 set(XM_MICROSTEP_BITS "12" CACHE STRING

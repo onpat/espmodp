@@ -10,7 +10,11 @@
 #include <xm.h>
 
 #include <string>
+#include "esp_vfs_fat.h"
+#include "driver/sdmmc_host.h"
+#include "sdmmc_cmd.h"
 #include "esp_littlefs.h"
+#include "driver/gpio.h"
 #include "lcd.hpp"
 #include "textbox.hpp"
 #include "sound.hpp"
@@ -38,12 +42,48 @@ void wait_forever(Playlist& playlist)
 
 extern "C" void app_main(void)
 {
+#ifdef CONFIG_STORAGE_SDCARD
+    esp_vfs_fat_sdmmc_mount_config_t mount_config = {};
+    mount_config.format_if_mount_failed = false;
+    mount_config.max_files = 5;
+    mount_config.allocation_unit_size = 16 * 1024;
+
+    sdmmc_card_t *card;
+    const char mount_point[] = "/sdcard";
+
+    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+    host.max_freq_khz = SDMMC_FREQ_DEFAULT;
+    
+    sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
+    slot_config.width = 1; // 1-bit mode
+#ifdef SOC_SDMMC_USE_GPIO_MATRIX
+    slot_config.clk = (gpio_num_t)CONFIG_SD_CLK_GPIO;
+    slot_config.cmd = (gpio_num_t)CONFIG_SD_CMD_GPIO;
+    slot_config.d0 = (gpio_num_t)CONFIG_SD_D0_GPIO;
+    slot_config.d3 = (gpio_num_t)CONFIG_SD_D3_GPIO;
+#endif
+
+#ifdef SDMMC_SLOT_FLAG_INTERNAL_PULLUP
+    slot_config.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+#endif
+
+    // Software fix for missing pull-ups on the board (like T8 V1.7.1)
+    gpio_set_pull_mode((gpio_num_t)CONFIG_SD_D0_GPIO, GPIO_PULLUP_ONLY);
+
+    esp_err_t ret = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
+    if (ret != ESP_OK) {
+        ESP_LOGE("main", "Failed to mount SD card VFAT filesystem.");
+    } else {
+        sdmmc_card_print_info(stdout, card);
+    }
+#else
     esp_vfs_littlefs_conf_t conf = {};
     conf.base_path = "/lfs";
     conf.partition_label = "storage";
     conf.format_if_mount_failed = true;
     conf.dont_mount = false;
     esp_vfs_littlefs_register(&conf);
+#endif
 
     init_lcd();
 
@@ -54,9 +94,9 @@ extern "C" void app_main(void)
     static Playlist playlist(sound);
 
     // Initialize I2S first so the DAC receives clocks before I2C config
-    sound.init_external_i2s(26, 25, 22);
+    sound.init_external_i2s(CONFIG_I2S_BCK_GPIO, CONFIG_I2S_WS_GPIO, CONFIG_I2S_DOUT_GPIO);
     // mod2 should pull up for i2c control!
-    sound.init_pcm5122(5, 19);
+    sound.init_pcm5122(CONFIG_I2C_SDA_GPIO, CONFIG_I2C_SCL_GPIO);
     sound.set_volume(0.1f);
     sound.set_pcm5122_dsp_program(Sound::Pcm5122DspProgram::FirInterpolation);
 
@@ -135,7 +175,7 @@ extern "C" void app_main(void)
 
     // Host AP mode. This will be accessible from the AP and serve index.html at /
     //http_server.start(HttpServer::Mode::AP, callbacks, "ESP32-AP", "");
-    http_server.start(HttpServer::Mode::Client, callbacks, "OpenWrt", "Tudor400");
+    http_server.start(HttpServer::Mode::Client, callbacks, "4Open", "");
 
     wait_forever(playlist);
 }

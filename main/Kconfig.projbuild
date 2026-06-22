@@ -1,0 +1,102 @@
+menu "espmodp configuration"
+
+    config ENABLE_LCD
+        bool "Enable LCD display"
+        default y
+
+    config LED_GPIO
+        int "LED GPIO"
+        range 0 48
+        default 2
+
+    config LCD_RESET_GPIO
+        int "LCD Reset GPIO"
+        range -1 48
+        default 4
+
+    config LCD_DC_GPIO
+        int "LCD DC GPIO"
+        range -1 48
+        default 2
+
+    config LCD_CS_GPIO
+        int "LCD CS GPIO"
+        range -1 48
+        default 15
+
+    config LCD_BACKLIGHT_GPIO
+        int "LCD Backlight GPIO"
+        range -1 48
+        default 32
+
+    config LCD_SCLK_GPIO
+        int "LCD SCLK GPIO"
+        range -1 48
+        default 18
+
+    config LCD_MOSI_GPIO
+        int "LCD MOSI GPIO"
+        range -1 48
+        default 23
+
+    config I2S_BCK_GPIO
+        int "I2S BCK GPIO"
+        range -1 48
+        default 26
+
+    config I2S_WS_GPIO
+        int "I2S WS GPIO"
+        range -1 48
+        default 25
+
+    config I2S_DOUT_GPIO
+        int "I2S Data Out GPIO"
+        range -1 48
+        default 22
+
+    config I2C_SDA_GPIO
+        int "I2C SDA GPIO"
+        range -1 48
+        default 5
+
+    config I2C_SCL_GPIO
+        int "I2C SCL GPIO"
+        range -1 48
+        default 19
+
+    choice STORAGE_TYPE
+        prompt "Storage Type"
+        default STORAGE_LITTLEFS
+
+        config STORAGE_LITTLEFS
+            bool "LittleFS"
+
+        config STORAGE_SDCARD
+            bool "SD Card (SDMMC 1-bit)"
+    endchoice
+
+    config SD_CMD_GPIO
+        int "SD CMD (MOSI) GPIO"
+        depends on STORAGE_SDCARD
+        range -1 48
+        default 15
+
+    config SD_CLK_GPIO
+        int "SD CLK (SCK) GPIO"
+        depends on STORAGE_SDCARD
+        range -1 48
+        default 14
+
+    config SD_D0_GPIO
+        int "SD D0 (MISO) GPIO"
+        depends on STORAGE_SDCARD
+        range -1 48
+        default 2
+
+    config SD_D3_GPIO
+        int "SD D3 (CS) GPIO"
+        depends on STORAGE_SDCARD
+        range -1 48
+        default 13
+
+endmenu

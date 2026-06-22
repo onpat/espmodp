@@ -7,6 +7,9 @@
 #include <cstddef>
 #include <memory>
 #include <new>
+#include "sdkconfig.h"
+
+#ifdef CONFIG_ENABLE_LCD
 
 namespace Textbox {
 namespace {
@@ -174,3 +177,5 @@ void draw_text(int x, int y, const char *text, uint16_t foreground, uint16_t bac
 }
 
 } // namespace Textbox
+
+#endif // CONFIG_ENABLE_LCD
