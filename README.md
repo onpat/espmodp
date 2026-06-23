@@ -5,7 +5,7 @@ vibe-coded module player application for ESP32
 ## detail
 
 - can play mod, xm, s3m files to DAC
-- control player from web interface
+- control player from web interface and 2 button
   - volume
   - pause, skip (but not seek)
   - playlist
@@ -20,6 +20,8 @@ vibe-coded module player application for ESP32
   - decompress sample on SRAM at calculating audio frame
   - but not effective for playback on ESP32 - decompress is too heavy
     - Int16 and 8 is generally recomemended
+
+- playback options of libxm and gpio configs in `menuconfig`
 
 ## supported hardware
 
