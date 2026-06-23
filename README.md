@@ -18,7 +18,8 @@ vibe-coded module player application for ESP32
   - select with menuconfig (`idf.py menuconfig`)
   - compressing samples on loading module to PSRAM
   - decompress sample on SRAM at calculating audio frame
-  - not working for MOD file ... ?
+  - but not effective for playback on ESP32 - decompress is too heavy
+    - Int16 and 8 is generally recomemended
 
 ## supported hardware
 
@@ -35,13 +36,21 @@ Optionally configure through compile switch:
 
 ## note
 
-Don't forget enable `-O3 -ffast-math` option on compiler because audio processing uses float calculation.
+Don't forget enable `-O3 -ffast-math` option on compiler because audio processing is heavy.
 
 this project includes modified [libxm](https://github.com/Artefact2/libxm) for ESP32 hardware.
  - add IRAM_ATTR attribution to hot-path function
  - replace exp2 with bit-shift implement
  - panning 80% on playing mod files
- - DD4A and DD8A sample compression
+ - faster quasi-cubic panning
+
+ESP32 can play ~27 Channel XM file with:
+ - no linear sample interpolation
+ - no volume ramping
+ - 8-bit sampling bits (converted from 16-bit sample on loading)
+ - 44100Hz sampling rate
+ - quasi-cubic panning
+ - 240Mhz, Dual-core, 4MB PSRAM and SD card
 
 ## License
 
