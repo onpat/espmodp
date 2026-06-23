@@ -76,6 +76,35 @@ menu "espmodp configuration"
             default 19
     endmenu
 
+    menu "Button configuration"
+        config BUTTON_RED_GPIO
+            int "Red Button GPIO"
+            range -1 48
+            default 34
+
+        config BUTTON_BLACK_GPIO
+            int "Black Button GPIO"
+            range -1 48
+            default 35
+
+        config BUTTON_ACTIVE_LOW
+            bool "Active Low (Pressed = 0)"
+            default y
+            help
+                If enabled, a GPIO level of 0 is considered 'pressed'.
+                If disabled, a GPIO level of 1 is considered 'pressed'.
+
+        config BUTTON_HOLD_TIME_MS
+            int "Hold time (ms) for long press"
+            range 100 5000
+            default 500
+
+        config BUTTON_CLICK_WINDOW_MS
+            int "Click window (ms) for double click / single click detection"
+            range 100 2000
+            default 500
+    endmenu
+
     choice XM_SAMPLE_TYPE
         prompt "Sample Format"
         default XM_SAMPLE_INT16
@@ -170,12 +199,17 @@ menu "espmodp configuration"
             memory usage.
 
     config XM_PANNING_TYPE
-        int "libxm: panning curve type (0, 1..7, 8=sine, 9)"
-        range 0 9
-        default 8
+        int "libxm: panning curve type"
+        range 0 11
+        default 11
         help
-            Selects the panning curve used by libxm. 8 (sine) matches
-            FastTracker II. See libxm documentation for other values.
+            Selects the panning curve used by libxm.
+            0 = Mono
+            1..7 = Hard Amiga panning
+            8 = Full stereo panning (FastTracker II)
+            9 = Default ScreamTracker 3 panning
+            10 = Fast LUT-based cubic panning
+            11 = Fast quasi-cubic panning (optimized for ESP32)
 
     config XM_LOOPING_TYPE
         int "libxm: looping type (0=no bidi, 1=no loops, 2=default)"

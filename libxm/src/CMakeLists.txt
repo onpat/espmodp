@@ -83,8 +83,8 @@ set(XM_MICROSTEP_BITS "12" CACHE STRING
 	"Precision of sample stepping (8..12, higher = better pitch accuracy, lower = can load larger samples)")
 target_compile_definitions(xm PRIVATE XM_MICROSTEP_BITS=${XM_MICROSTEP_BITS})
 
-set(XM_PANNING_TYPE "8" CACHE STRING
-	"Panning type (0=Mono, 1..7=Hard Amiga panning, 8=Full stereo panning, 9=Default ST3 panning)")
+set(XM_PANNING_TYPE "11" CACHE STRING
+	"Panning type (0=Mono, 1..7=Hard Amiga panning, 8=Full stereo panning, 9=Default ST3 panning, 11=quasi-cubic panning)")
 target_compile_definitions(xm PRIVATE XM_PANNING_TYPE=${XM_PANNING_TYPE})
 
 set(XM_LOOPING_TYPE "2" CACHE STRING

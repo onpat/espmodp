@@ -19,6 +19,7 @@
 #include "textbox.hpp"
 #include "sound.hpp"
 #include "playlist.hpp"
+#include "input.hpp"
 #include "http_server.hpp"
 #include "esp_log.h"
 
@@ -30,11 +31,12 @@ constexpr uint16_t kBackground = 0x00F0;
 constexpr uint16_t kWhite = 0xFFFF;
 constexpr const char *kMessage = "hello, world!";
 
-void wait_forever(Playlist& playlist)
+void wait_forever(Playlist& playlist, Input& input)
 {
     while (true) {
         playlist.update();
-        vTaskDelay(pdMS_TO_TICKS(100));
+        input.update();
+        vTaskDelay(pdMS_TO_TICKS(20));
     }
 }
 
@@ -92,6 +94,7 @@ extern "C" void app_main(void)
     // Initialize libxm, load file and generate output
     static Sound sound;
     static Playlist playlist(sound);
+    static Input input(sound, playlist);
 
 #if defined(CONFIG_XM_SAMPLE_FLOAT)
     ESP_LOGI("main", "Current XM_SAMPLE_TYPE is Float");
@@ -191,5 +194,5 @@ extern "C" void app_main(void)
     playlist.rescan();
     playlist.play_next();
 
-    wait_forever(playlist);
+    wait_forever(playlist, input);
 }

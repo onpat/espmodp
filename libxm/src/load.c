@@ -832,7 +832,7 @@ static void xm_load_xmif(xm_context_t* __restrict ctx,
 			#else
 			0,
 			#endif
-			#if HAS_FEATURE(FEATURE_PANNING_ENVELOPES)
+			#if HAS_PANNING && HAS_FEATURE(FEATURE_PANNING_ENVELOPES)
 			&(ctx->instruments[i].panning_envelope),
 			#else
 			0,
@@ -1001,7 +1001,7 @@ void xm_save_context(const xm_context_t* __restrict ctx, char* __restrict out) {
 			#else
 			0,
 			#endif
-			#if HAS_FEATURE(FEATURE_PANNING_ENVELOPES)
+			#if HAS_PANNING && HAS_FEATURE(FEATURE_PANNING_ENVELOPES)
 			&(ctx->instruments[i].panning_envelope),
 			#else
 			0,
