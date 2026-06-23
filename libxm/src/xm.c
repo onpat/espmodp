@@ -156,7 +156,6 @@ uint16_t xm_get_number_of_samples(const xm_context_t* ctx) {
 	return ctx->module.num_samples;
 }
 
-#if defined(XM_SAMPLE_TYPE_DD4A) || defined(XM_SAMPLE_TYPE_DD8A)
 #include <stdio.h>
 void xm_dump_sample_info(const xm_context_t* ctx) {
 	uint16_t n = ctx->module.num_samples;
@@ -169,7 +168,11 @@ void xm_dump_sample_info(const xm_context_t* ctx) {
 		if(idx >= ctx->module.samples_data_length) {
 			valid = "OOB";
 		} else {
+#if defined(XM_SAMPLE_TYPE_DD4A) || defined(XM_SAMPLE_TYPE_DD8A)
 			void* p = ctx->samples_data[idx].p;
+#else
+			void* p = ctx->samples_data + idx;
+#endif
 			valid = p ? "OK" : "NULL";
 		}
 		fprintf(stderr, "  SMP[%u] length=%lu index=%lu data=%s\n",
@@ -178,7 +181,6 @@ void xm_dump_sample_info(const xm_context_t* ctx) {
 	}
 	fflush(stderr);
 }
-#endif
 
 xm_sample_point_t* xm_get_sample_waveform(xm_context_t* ctx,
                                           uint16_t sample, uint32_t* length) {
@@ -188,7 +190,29 @@ xm_sample_point_t* xm_get_sample_waveform(xm_context_t* ctx,
 	return ctx->samples_data + s->index;
 }
 
+#if defined(XM_SAMPLE_TYPE_DD4A) || defined(XM_SAMPLE_TYPE_DD8A)
+#if defined(XM_SAMPLE_TYPE_DD4A) || defined(XM_SAMPLE_TYPE_DD8A)
+#include <libsac.h>
+#endif
 
+uint32_t xm_get_packed_data_size(const xm_context_t* ctx) {
+	uint32_t total = 0;
+	for(uint32_t i = 0; i < ctx->module.samples_data_length; ++i) {
+		void* p = ctx->samples_data[i].p;
+		if(!p) continue;
+		#if defined(XM_SAMPLE_TYPE_DD4A) || defined(XM_SAMPLE_TYPE_DD8A)
+		total += (uint32_t)sac_get_size((sac_packed_data_t*)p);
+		total += POINTER_SIZE; /* the packed_data_t struct itself (SRAM) */
+		#endif
+	}
+	return total;
+}
+#else
+uint32_t xm_get_packed_data_size(const xm_context_t* ctx) {
+	(void)ctx;
+	return 0; /* non-DD modes: sample data lives inside the context pool */
+}
+#endif
 
 void xm_get_playing_speed(__attribute__((unused)) const xm_context_t* ctx,
                           uint8_t* bpm, uint8_t* tempo) {

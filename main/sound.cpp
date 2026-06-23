@@ -10,6 +10,21 @@
 
 extern "C" void xm_dump_sample_info(const xm_context_t*);
 
+// Single source of truth for hardware output rate.
+// When CONFIG_XM_SAMPLE_RATE is non-zero, libxm is compiled with that
+// rate hardcoded and the I2S/DAC clock must match. When zero (runtime
+// libxm), default both to 48000 and let xm_set_sample_rate() sync libxm.
+constexpr uint32_t kOutputSampleRate =
+#if CONFIG_XM_SAMPLE_RATE != 0
+    CONFIG_XM_SAMPLE_RATE;
+#else
+    48000;
+#endif
+
+#if CONFIG_ENABLE_CYCLE_LOGGING
+#define ENABLE_CYCLE_LOGGING
+#endif
+
 static const char* TAG = "Sound";
 
 constexpr uint8_t kPcm5122Addr = 0x4C;
@@ -69,7 +84,7 @@ bool Sound::load(const uint8_t* data, size_t size) {
     }
 
     uint32_t ctx_size = xm_size_for_context(prescan);
-    ESP_LOGI(TAG, "Context size required: %lu bytes", (unsigned long)ctx_size);
+    ESP_LOGI(TAG, "Context pool required: %lu bytes", (unsigned long)ctx_size);
 
     xm_ctx = nullptr; // Ensure we don't access it while reallocating
     if (xm_pool) {
@@ -91,6 +106,11 @@ bool Sound::load(const uint8_t* data, size_t size) {
         return false;
     }
 
+    uint32_t packed_size = xm_get_packed_data_size(xm_ctx);
+    ESP_LOGI(TAG, "Packed sample data: %lu bytes | Total memory: %lu bytes",
+             (unsigned long)packed_size,
+             (unsigned long)(ctx_size + packed_size));
+
     fprintf(stderr, "POST-LOAD: num_samples=%u "
            "num_instruments=%u channels=%u\n",
            xm_get_number_of_samples(xm_ctx),
@@ -100,7 +120,7 @@ bool Sound::load(const uint8_t* data, size_t size) {
 
     xm_dump_sample_info(xm_ctx);
 
-    xm_set_sample_rate(xm_ctx, 48000);
+    xm_set_sample_rate(xm_ctx, (uint16_t)kOutputSampleRate);
 
     ESP_LOGI(TAG, "Successfully loaded module from memory");
     return true;
@@ -150,7 +170,7 @@ bool Sound::load_from_file(const char* filepath) {
     }
 
     uint32_t ctx_size = xm_size_for_context(prescan);
-    ESP_LOGI(TAG, "Context size required: %lu bytes", (unsigned long)ctx_size);
+    ESP_LOGI(TAG, "Context pool required: %lu bytes", (unsigned long)ctx_size);
 
     xm_ctx = nullptr;
     if (xm_pool) {
@@ -175,9 +195,14 @@ bool Sound::load_from_file(const char* filepath) {
         return false;
     }
 
+    uint32_t packed_size = xm_get_packed_data_size(xm_ctx);
+    ESP_LOGI(TAG, "Packed sample data: %lu bytes | Total memory: %lu bytes",
+             (unsigned long)packed_size,
+             (unsigned long)(ctx_size + packed_size));
+
     ESP_LOGI(TAG, "Successfully loaded module from file");
 
-    xm_set_sample_rate(xm_ctx, 48000);
+    xm_set_sample_rate(xm_ctx, (uint16_t)kOutputSampleRate);
 
     fprintf(stderr, "POST-LOAD: num_samples=%u "
            "num_instruments=%u channels=%u\n",
@@ -205,6 +230,24 @@ void IRAM_ATTR Sound::generate(float* output, uint16_t num_samples) {
     }
 }
 
+#include "esp_cpu.h"
+
+extern "C" {
+    extern uint64_t g_cycles_tick;
+    extern uint64_t g_cycles_fetch;
+    extern uint64_t g_cycles_decode;
+    extern uint64_t g_cycles_mix;
+    extern uint64_t g_cycles_fetch_sample;
+    extern uint64_t g_cycles_fetch_logic;
+    extern uint64_t g_cycles_fetch_lerp;
+    extern uint32_t g_fetch_cache_hits;
+    extern uint32_t g_fetch_cache_misses;
+
+    uint32_t IRAM_ATTR get_cycle_count(void) {
+        return esp_cpu_get_cycle_count();
+    }
+}
+
 void IRAM_ATTR Sound::generate16(int16_t* output, uint16_t num_samples) {
     if (!xm_ctx) {
         ESP_LOGE(TAG, "Cannot generate samples, context not initialized");
@@ -219,8 +262,47 @@ void IRAM_ATTR Sound::generate16(int16_t* output, uint16_t num_samples) {
     float* temp_buf = temp_float_buf;
     if (!temp_buf) return;
     
+#ifdef ENABLE_CYCLE_LOGGING
+    g_cycles_tick = 0;
+    g_cycles_fetch = 0;
+    g_cycles_decode = 0;
+    g_cycles_mix = 0;
+    g_cycles_fetch_sample = 0;
+    g_cycles_fetch_logic = 0;
+    g_cycles_fetch_lerp = 0;
+    g_fetch_cache_hits = 0;
+    g_fetch_cache_misses = 0;
+    uint64_t start_time = esp_timer_get_time();
+#endif
+
     xm_generate_samples(xm_ctx, temp_buf, num_samples);
     
+#ifdef ENABLE_CYCLE_LOGGING
+    uint64_t end_time = esp_timer_get_time();
+
+    static uint64_t last_log_time = 0;
+    static uint32_t log_count = 0;
+    log_count++;
+    if (end_time - last_log_time > 1000000) {
+        uint64_t total_cycles = g_cycles_tick + g_cycles_fetch + g_cycles_mix;
+        if (total_cycles == 0) total_cycles = 1;
+        ESP_LOGI(TAG, "generate16 [%lu]: num_samples=%u, generate_time=%llu us",
+                 (unsigned long)log_count, num_samples, (unsigned long long)(end_time - start_time));
+        ESP_LOGI(TAG, "  -> tick: %llu cyc (%llu%%), fetch: %llu cyc (%llu%%), decode: %llu cyc (%llu%% of fetch), mix: %llu cyc (%llu%%)",
+                 (unsigned long long)g_cycles_tick, (unsigned long long)(g_cycles_tick * 100 / total_cycles),
+                 (unsigned long long)g_cycles_fetch, (unsigned long long)(g_cycles_fetch * 100 / total_cycles),
+                 (unsigned long long)g_cycles_decode, (unsigned long long)(g_cycles_fetch > 0 ? g_cycles_decode * 100 / g_cycles_fetch : 0),
+                 (unsigned long long)g_cycles_mix, (unsigned long long)(g_cycles_mix * 100 / total_cycles));
+        ESP_LOGI(TAG, "  -> fetch breakdown: sample: %llu cyc (%llu%% of fetch), logic: %llu cyc, lerp: %llu cyc, overhead: %llu cyc, cache hits: %lu, misses: %lu",
+                 (unsigned long long)g_cycles_fetch_sample, (unsigned long long)(g_cycles_fetch > 0 ? g_cycles_fetch_sample * 100 / g_cycles_fetch : 0),
+                 (unsigned long long)g_cycles_fetch_logic,
+                 (unsigned long long)g_cycles_fetch_lerp,
+                 (unsigned long long)(g_cycles_fetch > (g_cycles_fetch_sample + g_cycles_fetch_logic + g_cycles_fetch_lerp) ? g_cycles_fetch - g_cycles_fetch_sample - g_cycles_fetch_logic - g_cycles_fetch_lerp : 0),
+                 (unsigned long)g_fetch_cache_hits, (unsigned long)g_fetch_cache_misses);
+        last_log_time = end_time;
+    }
+#endif
+
     for (uint32_t i = 0; i < (uint32_t)num_samples * 2; ++i) {
 #ifdef ENABLE_SOFTWARE_VOLUME
         float v = temp_buf[i] * master_volume;
@@ -378,6 +460,7 @@ void Sound::play_task(void* arg) {
                 sound->play_callback(buffer, sound->play_chunk_samples);
             }
         }
+        vTaskDelay(0); // Yield to reset task watchdog if needed
     }
     
     if (buffer) {
@@ -393,7 +476,7 @@ bool Sound::init_internal_dac() {
     cont_cfg.chan_mask = DAC_CHANNEL_MASK_ALL;
     cont_cfg.desc_num = 4;
     cont_cfg.buf_size = 2048;
-    cont_cfg.freq_hz = dac_oversampling ? 96000 : 48000;
+    cont_cfg.freq_hz = dac_oversampling ? kOutputSampleRate * 2 : kOutputSampleRate;
     cont_cfg.offset = 0;
     cont_cfg.clk_src = DAC_DIGI_CLK_SRC_DEFAULT;
     cont_cfg.chan_mode = DAC_CHANNEL_MODE_ALTER;
@@ -408,7 +491,7 @@ bool Sound::init_external_i2s(int bck_io_num, int ws_io_num, int data_out_num) {
     if (i2s_new_channel(&chan_cfg, &i2s_tx_handle, NULL) != ESP_OK) return false;
 
     i2s_std_config_t std_cfg = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(48000),
+        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(kOutputSampleRate),
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED,

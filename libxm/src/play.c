@@ -9,6 +9,28 @@
 
 #include "xm_internal.h"
 
+#if CONFIG_ENABLE_CYCLE_LOGGING
+#ifdef ESP_PLATFORM
+#include "esp_cpu.h"
+static inline uint32_t get_cycle_count(void) {
+    return esp_cpu_get_cycle_count();
+}
+#else
+extern uint32_t get_cycle_count(void);
+#endif
+#define ENABLE_CYCLE_LOGGING
+#endif
+
+uint64_t g_cycles_tick = 0;
+uint64_t g_cycles_fetch = 0;
+uint64_t g_cycles_decode = 0;
+uint64_t g_cycles_mix = 0;
+uint64_t g_cycles_fetch_sample = 0;
+uint64_t g_cycles_fetch_logic = 0;
+uint64_t g_cycles_fetch_lerp = 0;
+uint32_t g_fetch_cache_hits = 0;
+uint32_t g_fetch_cache_misses = 0;
+
 /* ----- Static functions ----- */
 
 __attribute__((unused)) static int8_t xm_waveform(uint8_t, uint8_t) __attribute__((warn_unused_result));
@@ -1847,11 +1869,21 @@ static float IRAM_ATTR xm_sample_at(const xm_context_t* ctx, xm_channel_context_
 #else
 	assert(sample->index + k < ctx->module.samples_data_length);
 #endif
-	return SAMPLE_DATA(ctx, ch, sample->index + k);
+#ifdef ENABLE_CYCLE_LOGGING
+	uint32_t t_fs_start = get_cycle_count();
+#endif
+	float val = SAMPLE_DATA(ctx, ch, sample->index + k);
+#ifdef ENABLE_CYCLE_LOGGING
+	g_cycles_fetch_sample += (uint32_t)(get_cycle_count() - t_fs_start);
+#endif
+	return val;
 }
 
 /* XXX: rename me or merge with xm_next_of_channel */
 static float IRAM_ATTR xm_next_of_sample(xm_context_t* ctx, xm_channel_context_t* ch) {
+#ifdef ENABLE_CYCLE_LOGGING
+	uint32_t t_start = get_cycle_count();
+#endif
 	const xm_sample_t* smp = ch->sample;
 	assert(smp == NULL || smp->loop_length <= smp->length);
 
@@ -1935,6 +1967,12 @@ static float IRAM_ATTR xm_next_of_sample(xm_context_t* ctx, xm_channel_context_t
 	#endif
 
 	ch->sample_position += ch->step;
+	
+#ifdef ENABLE_CYCLE_LOGGING
+	uint32_t t_end = get_cycle_count();
+	g_cycles_fetch += (uint32_t)(t_end - t_start);
+#endif
+	
 	return u;
 }
 
@@ -1980,14 +2018,26 @@ static void IRAM_ATTR xm_sample_unmixed(xm_context_t* ctx, float* out_lr) {
 }
 
 static void IRAM_ATTR xm_sample(xm_context_t* ctx, float* out_left, float* out_right) {
+#ifdef ENABLE_CYCLE_LOGGING
+	uint32_t t_start = get_cycle_count();
+#endif
 	if(ckd_sub(&ctx->remaining_samples_in_tick,
 	           ctx->remaining_samples_in_tick, TICK_SUBSAMPLES)) {
 		xm_tick(ctx);
 	}
+#ifdef ENABLE_CYCLE_LOGGING
+	uint32_t t_tick = get_cycle_count();
+	g_cycles_tick += (uint32_t)(t_tick - t_start);
+#endif
 
 	for(uint8_t i = 0; i < NUM_CHANNELS(&ctx->module); ++i) {
 		xm_next_of_channel(ctx, ctx->channels + i, out_left, out_right);
 	}
+	
+#ifdef ENABLE_CYCLE_LOGGING
+	uint32_t t_mix = get_cycle_count();
+	g_cycles_mix += (uint32_t)(t_mix - t_tick);
+#endif
 
 	assert(*out_left <= NUM_CHANNELS(&ctx->module));
 	assert(*out_left >= -NUM_CHANNELS(&ctx->module));
@@ -2043,13 +2093,26 @@ static float xm_decode_sac(const xm_context_t* ctx, xm_channel_context_t* ch, ui
 	int offset_in_block = (idx - ch->sample->index) % block_size;
 	
 	if(ch->decoded_block_idx != block_idx + 1) { // block_idx is 0-based, +1 to avoid 0 check
+#ifdef ENABLE_CYCLE_LOGGING
+		g_fetch_cache_misses++;
+#endif
 		sac_packed_data_t* p = ctx->samples_data[ch->sample->index].p;
 		if(p) {
+#ifdef ENABLE_CYCLE_LOGGING
+			uint32_t t_dec = get_cycle_count();
+#endif
 			sac_decode_channel(ch->decoded_block, p, block_idx * block_size, block_size, 0);
+#ifdef ENABLE_CYCLE_LOGGING
+			g_cycles_decode += (uint32_t)(get_cycle_count() - t_dec);
+#endif
 		} else {
 			__builtin_memset(ch->decoded_block, 0, 32 * sizeof(int16_t));
 		}
 		ch->decoded_block_idx = block_idx + 1;
+	} else {
+#ifdef ENABLE_CYCLE_LOGGING
+		g_fetch_cache_hits++;
+#endif
 	}
 	
 	return (float)ch->decoded_block[offset_in_block] * (1.0f / 32768.f);

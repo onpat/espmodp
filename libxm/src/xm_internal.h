@@ -36,6 +36,7 @@
 #define assume(x) do { if(!(x)) { __builtin_unreachable(); } } while(0)
 
 #ifdef NDEBUG
+#undef assert
 #define assert(x) assume(x)
 #else
 #include <assert.h>
@@ -597,7 +598,7 @@ struct xm_channel_context_s {
 	 * a couple of float operations on every generated sample. */
 	float target_volume[2];
 	uint32_t frame_count; /* Gets reset after every note */
-	static_assert(RAMPING_POINTS % 2 == 1);
+	static_assert(RAMPING_POINTS % 2 == 0);
 	float end_of_previous_sample[RAMPING_POINTS];
 	#endif
 

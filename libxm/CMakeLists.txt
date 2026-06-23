@@ -15,29 +15,31 @@ else()
     set(XM_SAMPLE_TYPE "int16_t")
 endif()
 
-set(XM_SAMPLE_RATE "0" CACHE STRING
-    "libxm output sample rate, or 0 to configure at runtime")
-set(XM_MICROSTEP_BITS "12" CACHE STRING
-    "libxm sample stepping precision, 8..12")
-set(XM_PANNING_TYPE "8" CACHE STRING
-    "libxm panning type")
-set(XM_LOOPING_TYPE "2" CACHE STRING
-    "libxm looping type")
-set(XM_DISABLED_EFFECTS "0" CACHE STRING
-    "libxm disabled effects bit mask")
-set(XM_DISABLED_VOLUME_EFFECTS "0" CACHE STRING
-    "libxm disabled volume effects bit mask")
-set(XM_DISABLED_FEATURES "0" CACHE STRING
-    "libxm disabled features bit mask")
-
-option(XM_VERBOSE "libxm verbose logging" OFF)
-option(XM_LINEAR_INTERPOLATION "libxm linear interpolation" OFF)
-option(XM_RAMPING "libxm ramping" OFF)
-option(XM_LIBXM_DELTA_SAMPLES "libxm delta samples in dump format" ON)
-option(XM_STRINGS "libxm stores module, instrument, and sample names" ON)
-option(XM_TIMING_FUNCTIONS "libxm timing query functions" ON)
-option(XM_MUTING_FUNCTIONS "libxm muting functions" ON)
-option(XM_MOD_SOFT_PANNING "libxm use 80% panning instead of 100% for MOD files" ON)
+# libxm tunables are provided by Kconfig (see main/Kconfig.projbuild,
+# menu "espmodp configuration"). Fall back to the upstream defaults if
+# the ESP-IDF config vars are not yet defined (eg. before `idf.py
+# reconfigure` has been run with the new Kconfig symbols).
+if(NOT DEFINED CONFIG_XM_SAMPLE_RATE)
+    set(CONFIG_XM_SAMPLE_RATE "0")
+endif()
+if(NOT DEFINED CONFIG_XM_MICROSTEP_BITS)
+    set(CONFIG_XM_MICROSTEP_BITS "12")
+endif()
+if(NOT DEFINED CONFIG_XM_PANNING_TYPE)
+    set(CONFIG_XM_PANNING_TYPE "8")
+endif()
+if(NOT DEFINED CONFIG_XM_LOOPING_TYPE)
+    set(CONFIG_XM_LOOPING_TYPE "2")
+endif()
+if(NOT DEFINED CONFIG_XM_DISABLED_EFFECTS)
+    set(CONFIG_XM_DISABLED_EFFECTS "0x0")
+endif()
+if(NOT DEFINED CONFIG_XM_DISABLED_VOLUME_EFFECTS)
+    set(CONFIG_XM_DISABLED_VOLUME_EFFECTS "0x0")
+endif()
+if(NOT DEFINED CONFIG_XM_DISABLED_FEATURES)
+    set(CONFIG_XM_DISABLED_FEATURES "0x0")
+endif()
 
 configure_file("${LIBXM_SRC_DIR}/xm.h.in" "${CMAKE_CURRENT_BINARY_DIR}/xm.h" @ONLY)
 
@@ -58,21 +60,21 @@ idf_component_register(
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -O3 -ffast-math -Wno-error=maybe-uninitialized)
 target_compile_definitions(${COMPONENT_LIB} PRIVATE
-    XM_VERBOSE=$<BOOL:${XM_VERBOSE}>
-    XM_LINEAR_INTERPOLATION=$<BOOL:${XM_LINEAR_INTERPOLATION}>
-    XM_RAMPING=$<BOOL:${XM_RAMPING}>
-    XM_LIBXM_DELTA_SAMPLES=$<BOOL:${XM_LIBXM_DELTA_SAMPLES}>
-    XM_STRINGS=$<BOOL:${XM_STRINGS}>
-    XM_TIMING_FUNCTIONS=$<BOOL:${XM_TIMING_FUNCTIONS}>
-    XM_MUTING_FUNCTIONS=$<BOOL:${XM_MUTING_FUNCTIONS}>
-    XM_MOD_SOFT_PANNING=$<BOOL:${XM_MOD_SOFT_PANNING}>
-    XM_SAMPLE_RATE=${XM_SAMPLE_RATE}
-    XM_MICROSTEP_BITS=${XM_MICROSTEP_BITS}
-    XM_PANNING_TYPE=${XM_PANNING_TYPE}
-    XM_LOOPING_TYPE=${XM_LOOPING_TYPE}
-    "XM_DISABLED_EFFECTS=${XM_DISABLED_EFFECTS}ULL"
-    "XM_DISABLED_VOLUME_EFFECTS=${XM_DISABLED_VOLUME_EFFECTS}ULL"
-    "XM_DISABLED_FEATURES=${XM_DISABLED_FEATURES}ULL"
+    XM_VERBOSE=$<BOOL:${CONFIG_XM_VERBOSE}>
+    XM_LINEAR_INTERPOLATION=$<BOOL:${CONFIG_XM_LINEAR_INTERPOLATION}>
+    XM_RAMPING=$<BOOL:${CONFIG_XM_RAMPING}>
+    XM_LIBXM_DELTA_SAMPLES=$<BOOL:${CONFIG_XM_LIBXM_DELTA_SAMPLES}>
+    XM_STRINGS=$<BOOL:${CONFIG_XM_STRINGS}>
+    XM_TIMING_FUNCTIONS=$<BOOL:${CONFIG_XM_TIMING_FUNCTIONS}>
+    XM_MUTING_FUNCTIONS=$<BOOL:${CONFIG_XM_MUTING_FUNCTIONS}>
+    XM_MOD_SOFT_PANNING=$<BOOL:${CONFIG_XM_MOD_SOFT_PANNING}>
+    XM_SAMPLE_RATE=${CONFIG_XM_SAMPLE_RATE}
+    XM_MICROSTEP_BITS=${CONFIG_XM_MICROSTEP_BITS}
+    XM_PANNING_TYPE=${CONFIG_XM_PANNING_TYPE}
+    XM_LOOPING_TYPE=${CONFIG_XM_LOOPING_TYPE}
+    "XM_DISABLED_EFFECTS=${CONFIG_XM_DISABLED_EFFECTS}ULL"
+    "XM_DISABLED_VOLUME_EFFECTS=${CONFIG_XM_DISABLED_VOLUME_EFFECTS}ULL"
+    "XM_DISABLED_FEATURES=${CONFIG_XM_DISABLED_FEATURES}ULL"
 )
 if(XM_SAMPLE_TYPE STREQUAL "dd4a_t")
     target_compile_definitions(${COMPONENT_LIB} PRIVATE XM_SAMPLE_TYPE_DD4A=1)

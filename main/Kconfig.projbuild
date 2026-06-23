@@ -9,60 +9,72 @@ menu "espmodp configuration"
         range 0 48
         default 2
 
-    config LCD_RESET_GPIO
-        int "LCD Reset GPIO"
-        range -1 48
-        default 4
+    menu "LCD GPIO"
+        config LCD_RESET_GPIO
+            int "LCD Reset GPIO"
+            range -1 48
+            default 4
 
-    config LCD_DC_GPIO
-        int "LCD DC GPIO"
-        range -1 48
-        default 2
+        config LCD_DC_GPIO
+            int "LCD DC GPIO"
+            range -1 48
+            default 2
 
-    config LCD_CS_GPIO
-        int "LCD CS GPIO"
-        range -1 48
-        default 15
+        config LCD_CS_GPIO
+            int "LCD CS GPIO"
+            range -1 48
+            default 15
 
-    config LCD_BACKLIGHT_GPIO
-        int "LCD Backlight GPIO"
-        range -1 48
-        default 32
+        config LCD_BACKLIGHT_GPIO
+            int "LCD Backlight GPIO"
+            range -1 48
+            default 32
 
-    config LCD_SCLK_GPIO
-        int "LCD SCLK GPIO"
-        range -1 48
-        default 18
+        config LCD_SCLK_GPIO
+            int "LCD SCLK GPIO"
+            range -1 48
+            default 18
 
-    config LCD_MOSI_GPIO
-        int "LCD MOSI GPIO"
-        range -1 48
-        default 23
+        config LCD_MOSI_GPIO
+            int "LCD MOSI GPIO"
+            range -1 48
+            default 23
+    endmenu
 
-    config I2S_BCK_GPIO
-        int "I2S BCK GPIO"
-        range -1 48
-        default 26
+    config ENABLE_CYCLE_LOGGING
+        bool "Enable cycle-accurate logging"
+        default n
+        help
+            Enables high-resolution cycle counting for performance analysis. (may impact performance)
 
-    config I2S_WS_GPIO
-        int "I2S WS GPIO"
-        range -1 48
-        default 25
+    menu "I2S GPIO"
+        config I2S_BCK_GPIO
+            int "I2S BCK GPIO"
+            range -1 48
+            default 26
 
-    config I2S_DOUT_GPIO
-        int "I2S Data Out GPIO"
-        range -1 48
-        default 22
+        config I2S_WS_GPIO
+            int "I2S WS GPIO"
+            range -1 48
+            default 25
 
-    config I2C_SDA_GPIO
-        int "I2C SDA GPIO"
-        range -1 48
-        default 5
+        config I2S_DOUT_GPIO
+            int "I2S Data Out GPIO"
+            range -1 48
+            default 22
+    endmenu
 
-    config I2C_SCL_GPIO
-        int "I2C SCL GPIO"
-        range -1 48
-        default 19
+    menu "I2C GPIO"
+        config I2C_SDA_GPIO
+            int "I2C SDA GPIO"
+            range -1 48
+            default 5
+
+        config I2C_SCL_GPIO
+            int "I2C SCL GPIO"
+            range -1 48
+            default 19
+    endmenu
 
     choice XM_SAMPLE_TYPE
         prompt "Sample Format"
@@ -86,6 +98,118 @@ menu "espmodp configuration"
             bool "DD8A"
     endchoice
 
+    config XM_RAMPING
+        bool "libxm: volume ramping (click reduction)"
+        default y
+        help
+            Enables volume ramping to reduce clicks when a channel's
+            volume changes abruptly. Slight CPU cost.
+
+    config XM_LINEAR_INTERPOLATION
+        bool "libxm: linear sample interpolation"
+        default y
+        help
+            Enables linear interpolation between sample points during
+            playback. Improves audio quality at slight CPU cost.
+
+    config XM_VERBOSE
+        bool "libxm: verbose logging"
+        default n
+
+    config XM_STRINGS
+        bool "libxm: store module/instrument/sample names"
+        default y
+        help
+            Stores the module, instrument, and sample name strings in
+            the context. Disabling reduces memory usage but breaks
+            the xm_get_*_name() functions.
+
+    config XM_TIMING_FUNCTIONS
+        bool "libxm: timing query functions"
+        default y
+        help
+            Compiles in the xm_get_latest_trigger_of_*() and related
+            timing query functions.
+
+    config XM_MUTING_FUNCTIONS
+        bool "libxm: channel/instrument mute functions"
+        default y
+        help
+            Compiles in the xm_mute_channel() and xm_mute_instrument()
+            functions.
+
+    config XM_LIBXM_DELTA_SAMPLES
+        bool "libxm: delta samples in dump format"
+        default y
+        help
+            Use delta encoding for samples in the libxm dump format.
+
+    config XM_MOD_SOFT_PANNING
+        bool "libxm: 80% panning for MOD files (instead of 100%)"
+        default y
+        help
+            Uses 80% hard panning for MOD files instead of 100%,
+            matching the behaviour of most MOD players.
+
+    config XM_SAMPLE_RATE
+        int "libxm: hardcoded output sample rate (0 = runtime-configurable)"
+        range 0 65535
+        default 0
+        help
+            Set to a non-zero value to hardcode the output sample
+            rate at compile time. 0 means the rate is set at runtime
+            via xm_set_sample_rate().
+
+    config XM_MICROSTEP_BITS
+        int "libxm: sample stepping precision (8..12)"
+        range 8 12
+        default 12
+        help
+            Number of bits used for sub-sample stepping precision. 12
+            gives the best quality; smaller values reduce CPU and
+            memory usage.
+
+    config XM_PANNING_TYPE
+        int "libxm: panning curve type (0, 1..7, 8=sine, 9)"
+        range 0 9
+        default 8
+        help
+            Selects the panning curve used by libxm. 8 (sine) matches
+            FastTracker II. See libxm documentation for other values.
+
+    config XM_LOOPING_TYPE
+        int "libxm: looping type (0=no bidi, 1=no loops, 2=default)"
+        range 0 2
+        default 2
+        help
+            2 = full loop support (default). 1 = no loops at all
+            (smaller code). 0 = no bidirectional loops. Setting 1
+            requires disabling the Bxx (jump to order) effect via
+            XM_DISABLED_EFFECTS.
+
+    config XM_DISABLED_EFFECTS
+        hex "libxm: bit mask of disabled effects"
+        default 0x0
+        help
+            Bitmask of effects to compile out. Each bit corresponds
+            to an effect number; setting the bit removes that effect
+            and saves code size. Use xm_analyze() to obtain suggested
+            values for a given module.
+
+    config XM_DISABLED_VOLUME_EFFECTS
+        hex "libxm: bit mask of disabled volume effects"
+        default 0x0
+        help
+            Bitmask of volume column effects to compile out. See
+            XM_DISABLED_EFFECTS for usage.
+
+    config XM_DISABLED_FEATURES
+        hex "libxm: bit mask of disabled features"
+        default 0x0
+        help
+            Bitmask of features (variable tempo, BPM, channel count,
+            ...) to compile out. Use xm_analyze() for suggestions.
+
     choice STORAGE_TYPE
         prompt "Storage Type"
         default STORAGE_LITTLEFS
@@ -97,28 +221,30 @@ menu "espmodp configuration"
             bool "SD Card (SDMMC 1-bit)"
     endchoice
 
-    config SD_CMD_GPIO
-        int "SD CMD (MOSI) GPIO"
-        depends on STORAGE_SDCARD
-        range -1 48
-        default 15
+    menu "SD Card GPIO"
+        config SD_CMD_GPIO
+            int "SD CMD (MOSI) GPIO"
+            depends on STORAGE_SDCARD
+            range -1 48
+            default 15
 
-    config SD_CLK_GPIO
-        int "SD CLK (SCK) GPIO"
-        depends on STORAGE_SDCARD
-        range -1 48
-        default 14
+        config SD_CLK_GPIO
+            int "SD CLK (SCK) GPIO"
+            depends on STORAGE_SDCARD
+            range -1 48
+            default 14
 
-    config SD_D0_GPIO
-        int "SD D0 (MISO) GPIO"
-        depends on STORAGE_SDCARD
-        range -1 48
-        default 2
+        config SD_D0_GPIO
+            int "SD D0 (MISO) GPIO"
+            depends on STORAGE_SDCARD
+            range -1 48
+            default 2
 
-    config SD_D3_GPIO
-        int "SD D3 (CS) GPIO"
-        depends on STORAGE_SDCARD
-        range -1 48
-        default 13
+        config SD_D3_GPIO
+            int "SD D3 (CS) GPIO"
+            depends on STORAGE_SDCARD
+            range -1 48
+            default 13
+    endmenu
 
 endmenu

@@ -74,6 +74,24 @@ uint32_t xm_size_for_context(const xm_prescan_data_t* p)
 __attribute__((warn_unused_result))
 __attribute__((nonnull));
 
+/** Returns the total size in bytes of the packed (compressed) sample data
+ *  allocated outside the context pool (e.g. in PSRAM via libsac).
+ *
+ *  xm_size_for_context() returns only the context pool, which for DD modes
+ *  holds a pointer array — the actual compressed audio is allocated
+ *  separately. This function sums the compressed payload sizes plus the
+ *  per-sample container overhead so callers can report true memory usage.
+ *
+ *  For non-DD modes (int8/int16/float), sample data lives inside the
+ *  context pool, so this returns 0.
+ *
+ *  @param ctx a context previously created with xm_create_context()
+ *  @returns total packed data bytes (0 if non-DD mode or no samples)
+ */
+uint32_t xm_get_packed_data_size(const xm_context_t* ctx)
+__attribute__((warn_unused_result))
+__attribute__((nonnull));
+
 /** Create a XM context.
  *
  * Typical usage is:
