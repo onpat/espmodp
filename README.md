@@ -53,6 +53,7 @@ ESP32 can play ~27 Channel XM file with:
  - 44100Hz sampling rate
  - quasi-cubic panning
  - 240Mhz, Dual-core, 4MB PSRAM and SD card
+ - psram bug workaround disabled(not a problem in this project)
 
 ## License
 

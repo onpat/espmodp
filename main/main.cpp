@@ -21,6 +21,7 @@
 #include "playlist.hpp"
 #include "input.hpp"
 #include "http_server.hpp"
+#include "led.hpp"
 #include "esp_log.h"
 
 namespace {
@@ -44,6 +45,9 @@ void wait_forever(Playlist& playlist, Input& input)
 
 extern "C" void app_main(void)
 {
+    Led::get_instance().init();
+    Led::get_instance().set_on();
+
 #ifdef CONFIG_STORAGE_SDCARD
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {};
     mount_config.format_if_mount_failed = false;
@@ -75,6 +79,7 @@ extern "C" void app_main(void)
     esp_err_t ret = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
     if (ret != ESP_OK) {
         ESP_LOGE("main", "Failed to mount SD card VFAT filesystem.");
+        Led::get_instance().set_blink();
     } else {
         sdmmc_card_print_info(stdout, card);
     }
@@ -84,7 +89,9 @@ extern "C" void app_main(void)
     conf.partition_label = "storage";
     conf.format_if_mount_failed = true;
     conf.dont_mount = false;
-    esp_vfs_littlefs_register(&conf);
+    if (esp_vfs_littlefs_register(&conf) != ESP_OK) {
+        Led::get_instance().set_blink();
+    }
 #endif
 
     init_lcd();
@@ -161,6 +168,7 @@ extern "C" void app_main(void)
     };
     callbacks.on_set_volume = [&](float vol) {
         sound.set_volume(vol);
+        Led::get_instance().blink_once(100);
     };
     callbacks.on_files_changed = [&]() {
         playlist.rescan();

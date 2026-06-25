@@ -1,6 +1,7 @@
 #include "playlist.hpp"
 #include <dirent.h>
 #include <sys/stat.h>
+#include "led.hpp"
 #include "esp_log.h"
 #include <algorithm>
 
@@ -92,6 +93,8 @@ void Playlist::update() {
 void Playlist::play_next() {
     if (items_.empty()) return;
 
+    Led::get_instance().blink_once(500);
+
     current_index_++;
     if (current_index_ >= (int)items_.size()) {
         current_index_ = 0; // Play first song if reached end
@@ -108,8 +111,10 @@ void Playlist::play(size_t index) {
     
     ESP_LOGI(TAG, "Playlist::play(%zu) - File: %s", index, path.c_str());
 
+    Led::get_instance().set_off();
     sound_.stop_playing();
     if (sound_.load_from_file(path.c_str())) {
+        Led::get_instance().set_on();
         sound_.set_max_loop_count(0); // 0 means loop indefinitely, which allows get_loop_count() to increment
         last_loop_count_ = 0;
         const uint16_t chunk_samples = 1024;
@@ -120,6 +125,7 @@ void Playlist::play(size_t index) {
         ESP_LOGI(TAG, "Playing %s", path.c_str());
     } else {
         ESP_LOGE(TAG, "Failed to play %s", path.c_str());
+        Led::get_instance().set_blink();
         // Try next song to avoid getting stuck?
         // play_next();
     }
@@ -129,6 +135,7 @@ void Playlist::stop() {
     ESP_LOGI(TAG, "Playlist::stop() (Pause)");
     sound_.stop_playing();
     is_playing_ = false;
+    Led::get_instance().set_off();
 }
 
 void Playlist::resume() {
@@ -139,6 +146,7 @@ void Playlist::resume() {
             sound_.output_external_i2s(buffer, samples);
         });
         is_playing_ = true;
+        Led::get_instance().set_on();
     }
 }
 
