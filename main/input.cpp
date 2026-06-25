@@ -69,16 +69,29 @@ void Input::handle_red_button() {
 
 void Input::handle_black_button() {
     int level = gpio_get_level(kBlackButtonGpio);
+    int64_t now = esp_timer_get_time();
+
     bool pressed = kActiveLow ? (level == 0) : (level == 1);
 
     if (pressed) {
         if (!black_state_.is_pressed) {
             black_state_.is_pressed = true;
-            playlist_.play_next();
-            ESP_LOGI(TAG, "Black Button: Click (Next song)");
+            black_state_.press_time = now;
+            black_state_.hold_triggered = false;
+        } else if (!black_state_.hold_triggered && (now - black_state_.press_time) > kHoldTimeUs) {
+            bool loop = !playlist_.get_loop();
+            playlist_.set_loop(loop);
+            ESP_LOGI(TAG, "Black Button: Long Press (Loop %s)", loop ? "enabled" : "disabled");
+            black_state_.hold_triggered = true;
         }
     } else {
-        black_state_.is_pressed = false;
+        if (black_state_.is_pressed) {
+            if (!black_state_.hold_triggered) {
+                playlist_.play_next();
+                ESP_LOGI(TAG, "Black Button: Click (Next song)");
+            }
+            black_state_.is_pressed = false;
+        }
     }
 }
 
