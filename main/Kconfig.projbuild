@@ -208,8 +208,8 @@ menu "espmodp configuration"
             1..7 = Hard Amiga panning
             8 = Full stereo panning (FastTracker II)
             9 = Default ScreamTracker 3 panning
-            10 = Fast LUT-based cubic panning
-            11 = Fast quasi-cubic panning (optimized for ESP32)
+            10 = LUT-based cubic panning (Not recommended)
+            11 = Fast quasi-cubic panning
 
     config XM_LOOPING_TYPE
         int "libxm: looping type (0=no bidi, 1=no loops, 2=default)"

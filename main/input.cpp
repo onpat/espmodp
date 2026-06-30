@@ -83,14 +83,35 @@ void Input::handle_black_button() {
             playlist_.set_loop(loop);
             ESP_LOGI(TAG, "Black Button: Long Press (Loop %s)", loop ? "enabled" : "disabled");
             black_state_.hold_triggered = true;
+            black_state_.click_count = 0; // Cancel any pending clicks
         }
     } else {
         if (black_state_.is_pressed) {
             if (!black_state_.hold_triggered) {
-                playlist_.play_next();
-                ESP_LOGI(TAG, "Black Button: Click (Next song)");
+                if (playlist_.is_m3u_mode()) {
+                    black_state_.click_count++;
+                    black_state_.last_click_time = now;
+
+                    if (black_state_.click_count == 2) {
+                        playlist_.skip_current_m3u();
+                        ESP_LOGI(TAG, "Black Button: Double Click (Next m3u)");
+                        black_state_.click_count = 0;
+                    }
+                } else {
+                    playlist_.play_next();
+                    ESP_LOGI(TAG, "Black Button: Click (Next song)");
+                    black_state_.click_count = 0;
+                }
             }
             black_state_.is_pressed = false;
+        }
+
+        if (playlist_.is_m3u_mode() &&
+            black_state_.click_count == 1 &&
+            (now - black_state_.last_click_time) > kClickWindowUs) {
+            playlist_.play_next();
+            ESP_LOGI(TAG, "Black Button: Single Click (Next song)");
+            black_state_.click_count = 0;
         }
     }
 }
