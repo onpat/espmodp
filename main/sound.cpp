@@ -42,7 +42,7 @@ static esp_err_t pcm5122_write_reg(uint8_t reg, uint8_t val) {
     return err;
 }
 
-Sound::Sound() : xm_ctx(nullptr), xm_pool(nullptr), play_callback(nullptr), play_chunk_samples(0), play_task_handle(nullptr), playing(false), gptimer(nullptr), dac_handle(nullptr), i2s_tx_handle(nullptr), master_volume(1.0f) {
+Sound::Sound() : xm_ctx(nullptr), xm_pool(nullptr), xm_psram_pool(nullptr), play_callback(nullptr), play_chunk_samples(0), play_task_handle(nullptr), playing(false), gptimer(nullptr), dac_handle(nullptr), i2s_tx_handle(nullptr), master_volume(1.0f) {
     ESP_LOGI(TAG, "Initializing libxm (Sound constructor)");
 }
 
@@ -52,6 +52,10 @@ Sound::~Sound() {
     if (xm_pool) {
         heap_caps_free(xm_pool);
         xm_pool = nullptr;
+    }
+    if (xm_psram_pool) {
+        heap_caps_free(xm_psram_pool);
+        xm_psram_pool = nullptr;
     }
     if (temp_float_buf) {
         heap_caps_free(temp_float_buf);
@@ -83,33 +87,42 @@ bool Sound::load(const uint8_t* data, size_t size) {
         return false;
     }
 
-    uint32_t ctx_size = xm_size_for_context(prescan);
-    ESP_LOGI(TAG, "Context pool required: %lu bytes", (unsigned long)ctx_size);
+    uint32_t sram_size, psram_size;
+    xm_get_context_sizes(prescan, &sram_size, &psram_size);
+    ESP_LOGI(TAG, "Context pool required: %lu bytes SRAM, %lu bytes PSRAM", (unsigned long)sram_size, (unsigned long)psram_size);
 
     xm_ctx = nullptr; // Ensure we don't access it while reallocating
     if (xm_pool) {
         heap_caps_free(xm_pool);
         xm_pool = nullptr;
     }
+    if (xm_psram_pool) {
+        heap_caps_free(xm_psram_pool);
+        xm_psram_pool = nullptr;
+    }
 
-    xm_pool = static_cast<char*>(heap_caps_malloc(ctx_size, MALLOC_CAP_DEFAULT));
-    if (!xm_pool) {
+    xm_pool = static_cast<char*>(heap_caps_malloc(sram_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    xm_psram_pool = static_cast<char*>(heap_caps_malloc(psram_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!xm_pool || (!xm_psram_pool && psram_size > 0)) {
         ESP_LOGE(TAG, "Failed to allocate memory for context");
+        if (xm_pool) { heap_caps_free(xm_pool); xm_pool = nullptr; }
+        if (xm_psram_pool) { heap_caps_free(xm_psram_pool); xm_psram_pool = nullptr; }
         return false;
     }
 
-    xm_ctx = xm_create_context(xm_pool, prescan, &stream, size);
+    xm_ctx = xm_create_context_split(xm_pool, xm_psram_pool, prescan, &stream, size);
     if (!xm_ctx) {
         ESP_LOGE(TAG, "Failed to create context");
         heap_caps_free(xm_pool);
         xm_pool = nullptr;
+        if (xm_psram_pool) { heap_caps_free(xm_psram_pool); xm_psram_pool = nullptr; }
         return false;
     }
 
     uint32_t packed_size = xm_get_packed_data_size(xm_ctx);
     ESP_LOGI(TAG, "Packed sample data: %lu bytes | Total memory: %lu bytes",
              (unsigned long)packed_size,
-             (unsigned long)(ctx_size + packed_size));
+             (unsigned long)(sram_size + psram_size + packed_size));
 
     fprintf(stderr, "POST-LOAD: num_samples=%u "
            "num_instruments=%u channels=%u\n",
@@ -169,36 +182,45 @@ bool Sound::load_from_file(const char* filepath) {
         return false;
     }
 
-    uint32_t ctx_size = xm_size_for_context(prescan);
-    ESP_LOGI(TAG, "Context pool required: %lu bytes", (unsigned long)ctx_size);
+    uint32_t sram_size, psram_size;
+    xm_get_context_sizes(prescan, &sram_size, &psram_size);
+    ESP_LOGI(TAG, "Context pool required: %lu bytes SRAM, %lu bytes PSRAM", (unsigned long)sram_size, (unsigned long)psram_size);
 
     xm_ctx = nullptr;
     if (xm_pool) {
         heap_caps_free(xm_pool);
         xm_pool = nullptr;
     }
+    if (xm_psram_pool) {
+        heap_caps_free(xm_psram_pool);
+        xm_psram_pool = nullptr;
+    }
 
-    xm_pool = static_cast<char*>(heap_caps_malloc(ctx_size, MALLOC_CAP_DEFAULT));
-    if (!xm_pool) {
+    xm_pool = static_cast<char*>(heap_caps_malloc(sram_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    xm_psram_pool = static_cast<char*>(heap_caps_malloc(psram_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!xm_pool || (!xm_psram_pool && psram_size > 0)) {
         ESP_LOGE(TAG, "Failed to allocate memory for context");
+        if (xm_pool) { heap_caps_free(xm_pool); xm_pool = nullptr; }
+        if (xm_psram_pool) { heap_caps_free(xm_psram_pool); xm_psram_pool = nullptr; }
         fclose(f);
         return false;
     }
 
-    xm_ctx = xm_create_context(xm_pool, prescan, &stream, size);
+    xm_ctx = xm_create_context_split(xm_pool, xm_psram_pool, prescan, &stream, size);
     fclose(f);
 
     if (!xm_ctx) {
         ESP_LOGE(TAG, "Failed to create context");
         heap_caps_free(xm_pool);
         xm_pool = nullptr;
+        if (xm_psram_pool) { heap_caps_free(xm_psram_pool); xm_psram_pool = nullptr; }
         return false;
     }
 
     uint32_t packed_size = xm_get_packed_data_size(xm_ctx);
     ESP_LOGI(TAG, "Packed sample data: %lu bytes | Total memory: %lu bytes",
              (unsigned long)packed_size,
-             (unsigned long)(ctx_size + packed_size));
+             (unsigned long)(sram_size + psram_size + packed_size));
 
     ESP_LOGI(TAG, "Successfully loaded module from file");
 

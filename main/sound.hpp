@@ -61,6 +61,7 @@ public:
 private:
     xm_context_t* xm_ctx;
     char* xm_pool;
+    char* xm_psram_pool;
 
     std::function<void(int16_t*, uint16_t)> play_callback;
     uint16_t play_chunk_samples;

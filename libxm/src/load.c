@@ -184,7 +184,6 @@ const uint8_t XM_PRESCAN_DATA_SIZE = sizeof(xm_prescan_data_t);
 /* ----- Static functions ----- */
 
 static int8_t xm_dither_16b_8b(int16_t);
-static uint64_t xm_fnv1a(const unsigned char*, uint32_t) __attribute__((const));
 static void xm_fixup_common(xm_context_t*);
 
 static bool xm_prescan_xmif(xm_stream_t*, uint32_t, xm_prescan_data_t*);
@@ -361,50 +360,53 @@ bool xm_prescan_module(xm_stream_t* __restrict moddata, uint32_t moddata_length,
 	return true;
 }
 
-xm_context_t* xm_create_context(char* __restrict mempool,
-                                const xm_prescan_data_t* __restrict p,
-                                xm_stream_t* __restrict moddata,
-                                uint32_t moddata_length) {
+xm_context_t* xm_create_context_split(char* __restrict sram_pool,
+                                      char* __restrict psram_pool,
+                                      const xm_prescan_data_t* __restrict p,
+                                      xm_stream_t* __restrict moddata,
+                                      uint32_t moddata_length) {
 	/* Make sure we are not misaligning data by accident */
-	ASSERT_ALIGNED(mempool, xm_context_t);
-	uint32_t ctx_size = xm_size_for_context(p);
-	__builtin_memset(mempool, 0, ctx_size);
-	xm_context_t* ctx = (xm_context_t*)mempool;
-	mempool += sizeof(xm_context_t);
+	ASSERT_ALIGNED(sram_pool, xm_context_t);
+	uint32_t sram_size, psram_size;
+	xm_get_context_sizes(p, &sram_size, &psram_size);
 
-	ASSERT_ALIGNED(mempool, xm_channel_context_t);
-	ctx->channels = (xm_channel_context_t*)mempool;
-	mempool += sizeof(xm_channel_context_t) * p->num_channels;
+	__builtin_memset(sram_pool, 0, sram_size);
+	__builtin_memset(psram_pool, 0, psram_size);
 
-	#if HAS_INSTRUMENTS
-	ASSERT_ALIGNED(mempool, xm_instrument_t);
-	ctx->instruments = (xm_instrument_t*)mempool;
-	mempool += sizeof(xm_instrument_t) * p->num_instruments;
-	#endif
+	xm_context_t* ctx = (xm_context_t*)sram_pool;
+	sram_pool += sizeof(xm_context_t);
 
-	ASSERT_ALIGNED(mempool, xm_sample_t);
-	ctx->samples = (xm_sample_t*)mempool;
-	mempool += sizeof(xm_sample_t) * p->num_samples;
-
-	ASSERT_ALIGNED(mempool, xm_pattern_t);
-	ctx->patterns = (xm_pattern_t*)mempool;
-	mempool += sizeof(xm_pattern_t) * p->num_patterns;
-
-	ASSERT_ALIGNED(mempool, xm_sample_point_t);
-	ctx->samples_data = (xm_sample_point_t*)mempool;
-	mempool += sizeof(xm_sample_point_t) * p->samples_data_length;
-
-	ASSERT_ALIGNED(mempool, xm_pattern_slot_t);
-	ctx->pattern_slots = (xm_pattern_slot_t*)mempool;
-	mempool += sizeof(xm_pattern_slot_t) * p->num_rows * p->num_channels;
+	ASSERT_ALIGNED(sram_pool, xm_channel_context_t);
+	ctx->channels = (xm_channel_context_t*)sram_pool;
+	sram_pool += sizeof(xm_channel_context_t) * p->num_channels;
 
 	#if XM_LOOPING_TYPE == 2
-	ASSERT_ALIGNED(mempool, uint8_t);
-	ctx->row_loop_count = (uint8_t*)mempool;
-	mempool += sizeof(uint8_t) * MAX_ROWS_PER_PATTERN * p->pot_length;
+	ASSERT_ALIGNED(sram_pool, uint8_t);
+	ctx->row_loop_count = (uint8_t*)sram_pool;
+	sram_pool += sizeof(uint8_t) * MAX_ROWS_PER_PATTERN * p->pot_length;
 	#endif
 
-	assert(mempool - (char*)ctx == ctx_size);
+	#if HAS_INSTRUMENTS
+	ASSERT_ALIGNED(psram_pool, xm_instrument_t);
+	ctx->instruments = (xm_instrument_t*)psram_pool;
+	psram_pool += sizeof(xm_instrument_t) * p->num_instruments;
+	#endif
+
+	ASSERT_ALIGNED(psram_pool, xm_sample_t);
+	ctx->samples = (xm_sample_t*)psram_pool;
+	psram_pool += sizeof(xm_sample_t) * p->num_samples;
+
+	ASSERT_ALIGNED(psram_pool, xm_pattern_t);
+	ctx->patterns = (xm_pattern_t*)psram_pool;
+	psram_pool += sizeof(xm_pattern_t) * p->num_patterns;
+
+	ASSERT_ALIGNED(psram_pool, xm_sample_point_t);
+	ctx->samples_data = (xm_sample_point_t*)psram_pool;
+	psram_pool += sizeof(xm_sample_point_t) * p->samples_data_length;
+
+	ASSERT_ALIGNED(psram_pool, xm_pattern_slot_t);
+	ctx->pattern_slots = (xm_pattern_slot_t*)psram_pool;
+	psram_pool += sizeof(xm_pattern_slot_t) * p->num_rows * p->num_channels;
 
 	switch(p->format) {
 	case XM_FORMAT_XMIF:
@@ -439,11 +441,20 @@ xm_context_t* xm_create_context(char* __restrict mempool,
 	assert(NUM_INSTRUMENTS(&ctx->module) == p->num_instruments);
 	assert(ctx->module.num_samples == p->num_samples);
 	assert(ctx->module.samples_data_length == p->samples_data_length);
-	assert(xm_dump_size(ctx) == ctx_size);
+	assert(xm_dump_size(ctx) == sram_size + psram_size);
 
 	xm_fixup_common(ctx);
 	xm_reset_context(ctx);
 	return ctx;
+}
+
+xm_context_t* xm_create_context(char* __restrict mempool,
+                                const xm_prescan_data_t* __restrict p,
+                                xm_stream_t* __restrict moddata,
+                                uint32_t moddata_length) {
+	uint32_t sram_size;
+	xm_get_context_sizes(p, &sram_size, NULL);
+	return xm_create_context_split(mempool, mempool + sram_size, p, moddata, moddata_length);
 }
 
 static void xm_fixup_common(xm_context_t* ctx) {
@@ -520,6 +531,26 @@ uint32_t xm_size_for_context(const xm_prescan_data_t* p) {
 	return p->context_size;
 }
 
+void xm_get_context_sizes(const xm_prescan_data_t* p, uint32_t* sram_size, uint32_t* psram_size) {
+	uint32_t sram = sizeof(xm_context_t);
+	sram += sizeof(xm_channel_context_t) * p->num_channels;
+	#if XM_LOOPING_TYPE == 2
+	sram += sizeof(uint8_t) * MAX_ROWS_PER_PATTERN * p->pot_length;
+	#endif
+
+	uint32_t psram = 0;
+	#if HAS_INSTRUMENTS
+	psram += sizeof(xm_instrument_t) * p->num_instruments;
+	#endif
+	psram += sizeof(xm_sample_t) * p->num_samples;
+	psram += sizeof(xm_pattern_t) * p->num_patterns;
+	psram += sizeof(xm_sample_point_t) * p->samples_data_length;
+	psram += sizeof(xm_pattern_slot_t) * p->num_rows * p->num_channels;
+
+	if (sram_size) *sram_size = sram;
+	if (psram_size) *psram_size = psram;
+}
+
 static int8_t xm_dither_16b_8b(int16_t x) {
 	static uint32_t state = 0; /* XXX: make me reentrant */
 	return (x >= 32512) ? 127 :
@@ -544,15 +575,6 @@ uint32_t xm_dump_size(const xm_context_t* ctx) {
 		 + sizeof(uint8_t) * ctx->module.length * MAX_ROWS_PER_PATTERN
 		 #endif
 		 );
-}
-
-static uint64_t xm_fnv1a(const unsigned char* data, uint32_t length) {
-	uint64_t h = 14695981039346656037UL;
-	for(uint32_t i = 0; i < length; ++i) {
-		h ^= data[i];
-		h *= 1099511628211UL;
-	}
-	return h;
 }
 
 #define CALC_OFFSET(dest, orig) do { \
@@ -580,10 +602,7 @@ void xm_dump_context(xm_context_t* __restrict ctx, char* __restrict out) {
 	ctx->current_tick = 0;
 	ctx->remaining_samples_in_tick = 0;
 
-	/* (*) Everything done after this should be deterministically
-	   reversible */
 	uint32_t ctx_size = xm_dump_size(ctx);
-	__attribute__((unused)) uint64_t old_hash = xm_fnv1a((void*)ctx, ctx_size);
 
 	#if XM_LIBXM_DELTA_SAMPLES
 	/* Do nothing for floats, in practice this doesn't help */
@@ -596,27 +615,63 @@ void xm_dump_context(xm_context_t* __restrict ctx, char* __restrict out) {
 	#endif
 	#endif
 
-	CALC_OFFSET(ctx->patterns, ctx);
-	CALC_OFFSET(ctx->pattern_slots, ctx);
+	uint32_t offset = 0;
+	xm_context_t* out_ctx = (xm_context_t*)out;
+	__builtin_memcpy(out_ctx, ctx, sizeof(xm_context_t));
+	offset += sizeof(xm_context_t);
+
+	uint32_t size;
+
+	size = sizeof(xm_channel_context_t) * NUM_CHANNELS(&ctx->module);
+	out_ctx->channels = (xm_channel_context_t*)(intptr_t)offset;
+	__builtin_memcpy(out + offset, ctx->channels, size);
+	offset += size;
 
 	#if HAS_INSTRUMENTS
-	CALC_OFFSET(ctx->instruments, ctx);
+	size = sizeof(xm_instrument_t) * ctx->module.num_instruments;
+	out_ctx->instruments = (xm_instrument_t*)(intptr_t)offset;
+	__builtin_memcpy(out + offset, ctx->instruments, size);
+	offset += size;
 	#endif
 
-	CALC_OFFSET(ctx->samples, ctx);
-	CALC_OFFSET(ctx->samples_data, ctx);
-	CALC_OFFSET(ctx->channels, ctx);
+	size = sizeof(xm_sample_t) * ctx->module.num_samples;
+	out_ctx->samples = (xm_sample_t*)(intptr_t)offset;
+	__builtin_memcpy(out + offset, ctx->samples, size);
+	offset += size;
+
+	size = sizeof(xm_pattern_t) * ctx->module.num_patterns;
+	out_ctx->patterns = (xm_pattern_t*)(intptr_t)offset;
+	__builtin_memcpy(out + offset, ctx->patterns, size);
+	offset += size;
+
+	size = sizeof(xm_sample_point_t) * ctx->module.samples_data_length;
+	out_ctx->samples_data = (xm_sample_point_t*)(intptr_t)offset;
+	__builtin_memcpy(out + offset, ctx->samples_data, size);
+	offset += size;
+
+	size = sizeof(xm_pattern_slot_t) * ctx->module.num_rows * NUM_CHANNELS(&ctx->module);
+	out_ctx->pattern_slots = (xm_pattern_slot_t*)(intptr_t)offset;
+	__builtin_memcpy(out + offset, ctx->pattern_slots, size);
+	offset += size;
 
 	#if XM_LOOPING_TYPE == 2
-	CALC_OFFSET(ctx->row_loop_count, ctx);
+	size = sizeof(uint8_t) * ctx->module.length * MAX_ROWS_PER_PATTERN;
+	out_ctx->row_loop_count = (uint8_t*)(intptr_t)offset;
+	__builtin_memcpy(out + offset, ctx->row_loop_count, size);
+	offset += size;
 	#endif
 
-	__builtin_memcpy(out, ctx, ctx_size);
+	assert(offset == ctx_size);
 
-	/* Restore the context back to the state marked (*) */
-	ctx = xm_restore_context((void*)ctx);
-
-	assert(xm_fnv1a((void*)ctx, ctx_size) == old_hash);
+	#if XM_LIBXM_DELTA_SAMPLES
+	#if !defined(XM_SAMPLE_TYPE_DD4A) && !defined(XM_SAMPLE_TYPE_DD8A)
+	if(_Generic((xm_sample_point_t){0}, float: false, default: true)) {
+		for(uint32_t i = 1; i < ctx->module.samples_data_length; ++i) {
+			ctx->samples_data[i] += ctx->samples_data[i-1];
+		}
+	}
+	#endif
+	#endif
 }
 
 xm_context_t* xm_restore_context(char* data) {
