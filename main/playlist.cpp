@@ -123,6 +123,23 @@ std::string normalize_relative_path(std::string path) {
     return path;
 }
 
+std::string url_decode(const std::string& value) {
+    std::string result;
+    result.reserve(value.length());
+    for (size_t i = 0; i < value.length(); ++i) {
+        if (value[i] == '%' && i + 2 < value.length() && 
+            std::isxdigit(static_cast<unsigned char>(value[i + 1])) && 
+            std::isxdigit(static_cast<unsigned char>(value[i + 2]))) {
+            char hex[3] = { value[i + 1], value[i + 2], '\0' };
+            result += static_cast<char>(std::strtol(hex, nullptr, 16));
+            i += 2;
+        } else {
+            result += value[i];
+        }
+    }
+    return result;
+}
+
 bool is_safe_relative_path(const std::string& path) {
     if (path.empty() || path[0] == '/' || path.find(':') != std::string::npos) {
         return false;
@@ -389,10 +406,11 @@ bool Playlist::load_m3u(size_t index) {
             continue;
         }
 
-        std::string filename = normalize_relative_path(text);
+        std::string decoded_text = url_decode(text);
+        std::string filename = normalize_relative_path(decoded_text);
         if (!is_safe_relative_path(filename)) {
             ESP_LOGW(TAG, "Ignoring unsafe m3u path at %s:%d: %s",
-                     m3u_items_[index].filename.c_str(), line_number, text.c_str());
+                     m3u_items_[index].filename.c_str(), line_number, decoded_text.c_str());
             continue;
         }
 
