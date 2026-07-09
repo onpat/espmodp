@@ -40,6 +40,8 @@ Optionally configure through compile switch:
 
 Don't forget enable `-O3 -ffast-math` option on compiler because audio processing is heavy.
 
+Do not disable PSRAM bug workaround on Rev1 ESP32 (it will corrupt libxm context)
+
 this project includes modified [libxm](https://github.com/Artefact2/libxm) for ESP32 hardware.
  - add IRAM_ATTR attribution to hot-path function
  - replace exp2 with bit-shift implement
@@ -53,7 +55,6 @@ ESP32 can play ~27 Channel XM file with:
  - 44100Hz sampling rate
  - quasi-cubic panning
  - 240Mhz, Dual-core, 4MB PSRAM and SD card
- - psram bug workaround disabled(not a problem in this project)
  - disable assert
 
 ## License
