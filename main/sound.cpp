@@ -1,6 +1,8 @@
 #include "sound.hpp"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_audio_simple_dec_default.h"
+#include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_timer.h"
@@ -42,12 +44,39 @@ static esp_err_t pcm5122_write_reg(uint8_t reg, uint8_t val) {
     return err;
 }
 
+#include "esp_audio_dec_default.h"
+
 Sound::Sound() : xm_ctx(nullptr), xm_pool(nullptr), xm_psram_pool(nullptr), play_callback(nullptr), play_chunk_samples(0), play_task_handle(nullptr), playing(false), gptimer(nullptr), dac_handle(nullptr), i2s_tx_handle(nullptr), master_volume(1.0f) {
-    ESP_LOGI(TAG, "Initializing libxm (Sound constructor)");
+    ESP_LOGI(TAG, "Initializing libxm and esp_audio_codec (Sound constructor)");
+    esp_audio_dec_register_default();
+    esp_audio_simple_dec_register_default();
 }
 
 Sound::~Sound() {
     stop_playing();
+
+    if (stream_file) {
+        fclose(stream_file);
+        stream_file = nullptr;
+    }
+    if (simple_dec) {
+        esp_audio_simple_dec_close(simple_dec);
+        simple_dec = nullptr;
+    }
+    if (stream_read_buf) {
+        heap_caps_free(stream_read_buf);
+        stream_read_buf = nullptr;
+    }
+    if (stream_decode_buf) {
+        heap_caps_free(stream_decode_buf);
+        stream_decode_buf = nullptr;
+    }
+    if (stream_stereo_buf) {
+        heap_caps_free(stream_stereo_buf);
+        stream_stereo_buf = nullptr;
+    }
+    esp_audio_simple_dec_unregister_default();
+    esp_audio_dec_unregister_default();
 
     if (xm_pool) {
         heap_caps_free(xm_pool);
@@ -158,7 +187,80 @@ static size_t file_stream_read(xm_stream_t* stream, void* dest, size_t length, s
     return total;
 }
 
+bool Sound::load_stream(const char* filepath) {
+    ESP_LOGI(TAG, "Loading stream: %s", filepath);
+
+    if (stream_file) {
+        fclose(stream_file);
+        stream_file = nullptr;
+    }
+    if (simple_dec) {
+        esp_audio_simple_dec_close(simple_dec);
+        simple_dec = nullptr;
+    }
+
+    stream_file = fopen(filepath, "r");
+    if (!stream_file) {
+        ESP_LOGE(TAG, "Failed to open stream file: %s", filepath);
+        return false;
+    }
+
+    esp_audio_simple_dec_type_t dec_type = ESP_AUDIO_SIMPLE_DEC_TYPE_NONE;
+    if (strcasestr(filepath, ".mp3")) dec_type = ESP_AUDIO_SIMPLE_DEC_TYPE_MP3;
+    else if (strcasestr(filepath, ".flac")) dec_type = ESP_AUDIO_SIMPLE_DEC_TYPE_FLAC;
+    else {
+        ESP_LOGE(TAG, "Unsupported stream type: %s", filepath);
+        fclose(stream_file); stream_file = nullptr;
+        return false;
+    }
+
+    esp_audio_simple_dec_cfg_t dec_cfg = {};
+    dec_cfg.dec_type = dec_type;
+    dec_cfg.dec_cfg = nullptr;
+    dec_cfg.cfg_size = 0;
+    dec_cfg.use_frame_dec = false;
+
+    if (esp_audio_simple_dec_open(&dec_cfg, &simple_dec) != ESP_AUDIO_ERR_OK) {
+        ESP_LOGE(TAG, "Failed to open audio simple decoder");
+        fclose(stream_file); stream_file = nullptr;
+        return false;
+    }
+
+    is_stream = true;
+    stream_raw_len = 0;
+    if (!stream_read_buf || stream_read_buf_size < 16384) {
+        if (stream_read_buf) heap_caps_free(stream_read_buf);
+        stream_read_buf_size = 16384;
+        stream_read_buf = (uint8_t*)heap_caps_malloc(stream_read_buf_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+    if (!stream_decode_buf) {
+        stream_decode_buf_size = 8192;
+        stream_decode_buf = (uint8_t*)heap_caps_malloc(stream_decode_buf_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    }
+
+    if (!stream_read_buf || !stream_decode_buf) {
+        ESP_LOGE(TAG, "Failed to allocate stream buffers (out of internal memory?)");
+        if (stream_read_buf) { heap_caps_free(stream_read_buf); stream_read_buf = nullptr; }
+        if (stream_decode_buf) { heap_caps_free(stream_decode_buf); stream_decode_buf = nullptr; }
+        if (simple_dec) { esp_audio_simple_dec_close(simple_dec); simple_dec = nullptr; }
+        fclose(stream_file); stream_file = nullptr;
+        return false;
+    }
+
+    stream_sample_rate = 0;
+    stream_channels = 0;
+    stream_loop_count = 0;
+
+    return true;
+}
+
 bool Sound::load_from_file(const char* filepath) {
+    if (strcasestr(filepath, ".mp3") || strcasestr(filepath, ".flac")) {
+        return load_stream(filepath);
+    }
+
+    is_stream = false;
+
     ESP_LOGI(TAG, "Loading file from filesystem: %s", filepath);
 
     FILE* f = fopen(filepath, "r");
@@ -395,7 +497,11 @@ void Sound::start_playing(uint16_t chunk_samples, std::function<void(int16_t*, u
     play_callback = callback;
     playing = true;
     
-    xTaskCreatePinnedToCore(play_task, "Sound_Play", 4096, this, 5, (TaskHandle_t*)&play_task_handle, 1);
+    xTaskCreatePinnedToCore(play_task, "Sound_Play", 8192, this, 5, (TaskHandle_t*)&play_task_handle, 1);
+
+    if (is_stream) {
+        return; // Don't use gptimer for streaming, rely on I2S blocking
+    }
 
     gptimer_config_t timer_config = {};
     timer_config.clk_src = GPTIMER_CLK_SRC_DEFAULT;
@@ -458,7 +564,7 @@ bool IRAM_ATTR Sound::timer_isr_callback(gptimer_handle_t timer, const gptimer_a
 void Sound::play_task(void* arg) {
     Sound* sound = static_cast<Sound*>(arg);
 
-    int16_t* buffer = static_cast<int16_t*>(heap_caps_malloc(sound->play_chunk_samples * 2 * sizeof(int16_t), MALLOC_CAP_DEFAULT));
+    int16_t* buffer = static_cast<int16_t*>(heap_caps_malloc(sound->play_chunk_samples * 2 * sizeof(int16_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
     
     if (buffer && sound->play_callback) {
         memset(buffer, 0, sound->play_chunk_samples * 2 * sizeof(int16_t));
@@ -471,18 +577,135 @@ void Sound::play_task(void* arg) {
         }
     }
     
-    while (sound->playing) {
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-
-        if (!sound->playing) break;
-
-        if (sound->xm_ctx) {
-            sound->generate16(buffer, sound->play_chunk_samples);
-            if (sound->play_callback) {
-                sound->play_callback(buffer, sound->play_chunk_samples);
+    if (sound->is_stream) {
+        while (sound->playing) {
+            esp_audio_simple_dec_raw_t raw = { .buffer = sound->stream_read_buf, .len = (uint32_t)sound->stream_raw_len, .eos = false, .consumed = 0, .frame_recover = ESP_AUDIO_SIMPLE_DEC_RECOVERY_NONE };
+            esp_audio_simple_dec_out_t out_frame = { .buffer = sound->stream_decode_buf, .len = (uint32_t)sound->stream_decode_buf_size, .needed_size = 0, .decoded_size = 0 };
+            
+            if (raw.len < sound->stream_read_buf_size / 2 && sound->stream_file) {
+                size_t bytes_to_read = sound->stream_read_buf_size - raw.len;
+                size_t bytes_read = fread(sound->stream_read_buf + raw.len, 1, bytes_to_read, sound->stream_file);
+                raw.len += bytes_read;
+                if (bytes_read == 0) raw.eos = true;
+            } else if (!sound->stream_file) {
+                raw.eos = true;
             }
+            
+            if (raw.len == 0 && raw.eos) {
+                sound->stream_loop_count++;
+                if (sound->max_loop_count != 0 && sound->stream_loop_count > sound->max_loop_count) {
+                    sound->playing = false;
+                    break;
+                } else {
+                    fseek(sound->stream_file, 0, SEEK_SET);
+                    esp_audio_simple_dec_reset(sound->simple_dec);
+                    sound->stream_raw_len = 0;
+                    continue;
+                }
+            }
+            
+            esp_audio_err_t ret = esp_audio_simple_dec_process(sound->simple_dec, &raw, &out_frame);
+            if (ret == ESP_AUDIO_ERR_BUFF_NOT_ENOUGH) {
+                uint8_t* new_buf = (uint8_t*)heap_caps_realloc(sound->stream_decode_buf, out_frame.needed_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+                if (new_buf) {
+                    sound->stream_decode_buf = new_buf;
+                    sound->stream_decode_buf_size = out_frame.needed_size;
+                    continue;
+                } else {
+                    ESP_LOGE(TAG, "Failed to realloc stream_decode_buf to %lu bytes", (unsigned long)out_frame.needed_size);
+                    sound->playing = false;
+                    break;
+                }
+            } else if (ret == ESP_AUDIO_ERR_OK && out_frame.decoded_size > 0) {
+                esp_audio_simple_dec_info_t info;
+                if (esp_audio_simple_dec_get_info(sound->simple_dec, &info) == ESP_AUDIO_ERR_OK) {
+                    if (sound->stream_sample_rate != info.sample_rate) {
+                        sound->stream_sample_rate = info.sample_rate;
+                        sound->reconfig_i2s_clock(info.sample_rate);
+                    }
+                    sound->stream_channels = info.channel;
+                }
+                
+                uint32_t num_frames = out_frame.decoded_size / 2 / sound->stream_channels;
+                int16_t* play_buf = nullptr;
+
+                if (sound->stream_channels == 2) {
+                    play_buf = (int16_t*)out_frame.buffer;
+                    if (sound->master_volume != 1.0f) {
+                        for (uint32_t i = 0; i < num_frames * 2; i++) {
+                            float f = play_buf[i] * sound->master_volume;
+                            if (f > 32767.0f) f = 32767.0f; else if (f < -32768.0f) f = -32768.0f;
+                            play_buf[i] = (int16_t)f;
+                        }
+                    }
+                } else {
+                    if (sound->stream_stereo_buf_frames < num_frames) {
+                        if (sound->stream_stereo_buf) heap_caps_free(sound->stream_stereo_buf);
+                        
+                        size_t alloc_size = num_frames * 2 * sizeof(int16_t);
+                        sound->stream_stereo_buf = (int16_t*)heap_caps_malloc(alloc_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+                        if (sound->stream_stereo_buf) {
+                            sound->stream_stereo_buf_frames = num_frames;
+                        } else {
+                            sound->stream_stereo_buf_frames = 0;
+                            ESP_LOGE(TAG, "Failed to allocate stream_stereo_buf of size %zu (decoded_size: %lu, num_frames: %lu)", alloc_size, (unsigned long)out_frame.decoded_size, (unsigned long)num_frames);
+                            sound->playing = false;
+                            break;
+                        }
+                    }
+                    
+                    if (sound->stream_stereo_buf) {
+                        int16_t* pcm16 = (int16_t*)out_frame.buffer;
+                        for (uint32_t i = 0; i < num_frames; i++) {
+                            int16_t l = pcm16[i];
+                            int16_t r = pcm16[i];
+                            
+                            if (sound->master_volume != 1.0f) {
+                                float fl = l * sound->master_volume;
+                                float fr = r * sound->master_volume;
+                                if (fl > 32767.0f) fl = 32767.0f; else if (fl < -32768.0f) fl = -32768.0f;
+                                if (fr > 32767.0f) fr = 32767.0f; else if (fr < -32768.0f) fr = -32768.0f;
+                                sound->stream_stereo_buf[i * 2] = (int16_t)fl;
+                                sound->stream_stereo_buf[i * 2 + 1] = (int16_t)fr;
+                            } else {
+                                sound->stream_stereo_buf[i * 2] = l;
+                                sound->stream_stereo_buf[i * 2 + 1] = r;
+                            }
+                        }
+                        play_buf = sound->stream_stereo_buf;
+                    }
+                }
+                
+                if (play_buf && sound->play_callback) {
+                    sound->play_callback(play_buf, num_frames);
+                }
+            } else if (ret != ESP_AUDIO_ERR_OK && ret != ESP_AUDIO_ERR_NOT_FOUND) {
+                // Ignore parsing incomplete errors, but log others if debugging
+            }
+            
+            if (raw.consumed > 0 && raw.consumed <= raw.len) {
+                memmove(sound->stream_read_buf, sound->stream_read_buf + raw.consumed, raw.len - raw.consumed);
+                sound->stream_raw_len = raw.len - raw.consumed;
+            } else {
+                sound->stream_raw_len = raw.len;
+            }
+            
+            vTaskDelay(0);
         }
-        vTaskDelay(0); // Yield to reset task watchdog if needed
+    } else {
+        while (sound->playing) {
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+            if (!sound->playing) break;
+
+            if (sound->xm_ctx) {
+                sound->generate16(buffer, sound->play_chunk_samples);
+                if (sound->play_callback) {
+                    sound->play_callback(buffer, sound->play_chunk_samples);
+                }
+            }
+            vTaskDelay(0); // Yield to reset task watchdog if needed
+        }
     }
     
     if (buffer) {
@@ -491,6 +714,15 @@ void Sound::play_task(void* arg) {
     
     sound->play_task_handle = nullptr;
     vTaskDelete(NULL);
+}
+
+void Sound::reconfig_i2s_clock(uint32_t sample_rate) {
+    if (i2s_tx_handle) {
+        i2s_channel_disable(i2s_tx_handle);
+        i2s_std_clk_config_t clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate);
+        i2s_channel_reconfig_std_clock(i2s_tx_handle, &clk_cfg);
+        i2s_channel_enable(i2s_tx_handle);
+    }
 }
 
 bool Sound::init_internal_dac() {
@@ -668,11 +900,14 @@ bool Sound::init_pcm5122(int sda_io_num, int scl_io_num) {
 }
 
 uint8_t Sound::get_loop_count() const {
+    if (is_stream) return stream_loop_count;
     if (!xm_ctx) return 0;
     return xm_get_loop_count(xm_ctx);
 }
 
 void Sound::set_max_loop_count(uint8_t loopcnt) {
+    max_loop_count = loopcnt;
+    if (is_stream) return;
     if (!xm_ctx) return;
     xm_set_max_loop_count(xm_ctx, loopcnt);
 }

@@ -44,7 +44,9 @@ bool has_extension(const std::string& filename, const char* extension) {
 bool is_supported_module_file(const std::string& filename) {
     return has_extension(filename, ".xm") ||
            has_extension(filename, ".mod") ||
-           has_extension(filename, ".s3m");
+           has_extension(filename, ".s3m") ||
+           has_extension(filename, ".mp3") ||
+           has_extension(filename, ".flac");
 }
 
 bool is_m3u_file(const std::string& filename) {

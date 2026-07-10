@@ -8,6 +8,7 @@
 #include "driver/gptimer.h"
 #include "driver/dac_continuous.h"
 #include "driver/i2s_std.h"
+#include "esp_audio_simple_dec.h"
 
 class Sound {
 public:
@@ -20,6 +21,7 @@ public:
 
     bool load(const uint8_t* data, size_t size);
     bool load_from_file(const char* filepath);
+    bool load_stream(const char* filepath);
     void generate(float* output, uint16_t num_samples);
     void generate16(int16_t* output, uint16_t num_samples);
     void generate8(int8_t* output, uint16_t num_samples);
@@ -58,6 +60,8 @@ public:
     bool dac_oversampling = true;
     bool dac_dither = true;
 
+    void reconfig_i2s_clock(uint32_t sample_rate);
+
 private:
     xm_context_t* xm_ctx;
     char* xm_pool;
@@ -80,6 +84,22 @@ private:
     
     uint8_t* dac_buf = nullptr;
     size_t dac_buf_size = 0;
+
+    // Stream playback fields
+    bool is_stream = false;
+    FILE* stream_file = nullptr;
+    esp_audio_simple_dec_handle_t simple_dec = nullptr;
+    uint8_t* stream_read_buf = nullptr;
+    size_t stream_read_buf_size = 0;
+    size_t stream_raw_len = 0;
+    uint8_t* stream_decode_buf = nullptr;
+    size_t stream_decode_buf_size = 0;
+    int16_t* stream_stereo_buf = nullptr;
+    size_t stream_stereo_buf_frames = 0;
+    uint32_t stream_sample_rate = 0;
+    uint8_t stream_channels = 0;
+    uint32_t stream_loop_count = 0;
+    uint32_t max_loop_count = 0;
 
     static void play_task(void* arg);
     static bool timer_isr_callback(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx);

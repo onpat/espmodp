@@ -1,3 +1,4 @@
 dependencies:
   espressif/cjson: '*'
   joltwallet/littlefs: '*'
+  espressif/esp_audio_codec: '*'
