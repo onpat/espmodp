@@ -2,6 +2,10 @@
 
 vibe-coded module player application for ESP32
 
+## screenshot
+
+![web ui of espmodp](docs/screenshot.png)
+
 ## detail
 
 - can play mod, xm, s3m, flac, mp3 files to DAC
